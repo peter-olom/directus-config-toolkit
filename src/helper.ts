@@ -13,7 +13,7 @@ export const client = createDirectus(API_URL)
   .with(rest());
 
 // Utility function for REST calls using Axios
-export const callDirectusAPI = async (
+export const callDirectusAPI = async <T>(
   endpoint: string,
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   data?: any
@@ -28,7 +28,7 @@ export const callDirectusAPI = async (
       },
       data,
     });
-    return res?.data as Record<string, any>[];
+    return res?.data as T;
   } catch (error) {
     console.error("API call failed:", error);
     throw error;
@@ -72,4 +72,21 @@ export const printConfig = () => {
   console.log(`API URL: ${API_URL}`);
   console.log(`API Token: ${TOKEN}`);
   console.log(`Config Path: ${CONFIG_PATH}`);
+};
+
+export const restFileUpload = async (formData: FormData, update?: string) => {
+  const method = update ? "patch" : "post";
+  const url = update ? `${API_URL}/files/${update}` : `${API_URL}/files`;
+  try {
+    const { data } = await axios[method](url, formData, {
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        "Content-Type": "multipart/form-data",
+      },
+    });
+    return data;
+  } catch (error) {
+    console.error("File upload failed:", error);
+    throw error;
+  }
 };

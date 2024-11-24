@@ -1,16 +1,22 @@
 import {
+  createPermission,
   createPolicy,
   createRole,
+  deletePermissions,
   deletePolicies,
   deleteRoles,
+  readMe,
+  readPermissions,
   readPolicies,
+  readRole,
   readRoles,
+  updatePermission,
   updatePolicy,
   updateRole,
 } from "@directus/sdk";
 import { writeFileSync, readFileSync } from "fs";
 import { join } from "path";
-import _ from "lodash";
+import _, { filter } from "lodash";
 import {
   callDirectusAPI,
   client,
@@ -22,6 +28,7 @@ export class RolesManager {
   private rolePath: string = join(CONFIG_PATH, "roles.json");
   private policiesPath: string = join(CONFIG_PATH, "policies.json");
   private accessPath: string = join(CONFIG_PATH, "access.json");
+  private permissionsPath: string = join(CONFIG_PATH, "permissions.json");
   constructor() {}
 
   emptyPolicies(record: Record<string, any>) {
@@ -45,50 +52,80 @@ export class RolesManager {
     return record;
   }
 
+  emptyPermissions(record: Record<string, any>) {
+    if (record["permissions"]) {
+      record["permissions"] = [];
+    }
+    return record;
+  }
+
   exportRoles = async () => {
     ensureConfigDirs();
-    // backup roles first
+    const defaults = await this.retrieveDefaults();
+
+    // backup roles first (excluding the default role)
     const roles = await client.request(readRoles());
     writeFileSync(
       this.rolePath,
       JSON.stringify(
-        roles.map(this.emptyPolicies).map(this.emptyUsers),
+        roles.filter((r) => r.id != defaults.defaultRole).map(this.emptyUsers),
         null,
         2
       )
     );
 
-    // backup policies next
+    // backup policies next (excluding the default policies)
+    // drain roles and permissions from policies - they will be re-created on import access and permissions
     const policies = await client.request(readPolicies());
     writeFileSync(
       this.policiesPath,
       JSON.stringify(
-        policies.map(this.emptyRoles).map(this.emptyUsers),
+        policies
+          .filter((p) => !defaults.defaultPolicy.includes(p.id))
+          .map(this.emptyUsers)
+          .map(this.emptyRoles)
+          .map(this.emptyPermissions),
         null,
         2
       )
     );
 
-    // backup none-user access entries - use REST API
-    const access = await callDirectusAPI(
+    // backup none-user access entries (excluding the default access)
+    const access = await callDirectusAPI<Record<string, any>[]>(
       "access?filter[user][_null]=true",
       "GET"
     );
-    writeFileSync(this.accessPath, JSON.stringify(access, null, 2));
+    writeFileSync(
+      this.accessPath,
+      JSON.stringify(
+        access.filter((a) => !defaults.defaultAccess.includes(a.id)),
+        null,
+        2
+      )
+    );
+
+    // backup permissions - only permissions where id is set
+    const permissions = await this.retrievePermissions();
+    writeFileSync(this.permissionsPath, JSON.stringify(permissions, null, 2));
 
     console.log(`Roles exported to ${this.rolePath}`);
     console.log(`Policies exported to ${this.policiesPath}`);
     console.log(`Access exported to ${this.accessPath}`);
+    console.log(`Permissions exported to ${this.permissionsPath}`);
   };
 
   importRoles = async () => {
     await this.handleImportRoles();
     await this.handleImportPolicies();
     await this.handleImportAccess();
-    console.log("Roles, policies and access imported successfully.");
+    await this.handleImportPermissions();
+    console.log(
+      "Roles, policies, access and permissions imported successfully."
+    );
   };
 
   private async handleImportRoles() {
+    const defaults = await this.retrieveDefaults();
     const sourceRoles = JSON.parse(readFileSync(this.rolePath, "utf8"));
     const destinationRoles = await client.request(readRoles());
 
@@ -103,13 +140,19 @@ export class RolesManager {
       }
     }
 
-    const diffRoles = _.differenceBy(destinationRoles, sourceRoles, "id");
+    // delete roles that are not in the source (excluding the default role)
+    const diffRoles = _.differenceBy(
+      destinationRoles,
+      sourceRoles,
+      "id"
+    ).filter((r) => r.id !== defaults.defaultRole);
     if (diffRoles.length) {
       await client.request(deleteRoles(diffRoles.map((r) => r.id)));
     }
   }
 
   private async handleImportPolicies() {
+    const defaults = await this.retrieveDefaults();
     const sourcePolicies = JSON.parse(readFileSync(this.policiesPath, "utf8"));
     const destinationPolicies = await client.request(readPolicies());
 
@@ -126,19 +169,21 @@ export class RolesManager {
       }
     }
 
+    // delete policies that are not in the source (excluding the default policies)
     const diffPolicies = _.differenceBy(
       destinationPolicies,
       sourcePolicies,
       "id"
-    );
+    ).filter((p) => !defaults.defaultPolicy.includes(p.id));
     if (diffPolicies.length) {
       await client.request(deletePolicies(diffPolicies.map((p) => p.id)));
     }
   }
 
   private async handleImportAccess() {
+    const defaults = await this.retrieveDefaults();
     const sourceAccess = JSON.parse(readFileSync(this.accessPath, "utf8"));
-    const destinationAccess = await callDirectusAPI(
+    const destinationAccess = await callDirectusAPI<Record<string, any>[]>(
       "access?filter[user][_null]=true",
       "GET"
     );
@@ -154,7 +199,12 @@ export class RolesManager {
       }
     }
 
-    const diffAccess = _.differenceBy(destinationAccess, sourceAccess, "id");
+    // delete access that are not in the source (excluding the default access)
+    const diffAccess = _.differenceBy(
+      destinationAccess,
+      sourceAccess,
+      "id"
+    ).filter((a) => !defaults.defaultAccess.includes(a.id));
     if (diffAccess.length) {
       await callDirectusAPI(
         "access",
@@ -164,26 +214,63 @@ export class RolesManager {
     }
   }
 
-  private async clearRoles() {
-    // delete access first
-    const access = await callDirectusAPI(
-      "access?filter[user][_null]=true",
+  private async handleImportPermissions() {
+    const sourcePermissions: Record<string, any>[] = JSON.parse(
+      readFileSync(this.permissionsPath, "utf8")
+    );
+    const destinationPermissions = await this.retrievePermissions(false);
+
+    // for permissions, id is AUTO_INCREMENT IDENTITY_INSERT,
+    // so we need to create new permissions and delete obsolete ones on the destination (no updates)
+
+    // what exists in destination but not in source (delete)
+    const diffPermissions = _.differenceWith(
+      destinationPermissions,
+      sourcePermissions,
+      (a, b) => _.isEqual(_.omit(a, ["id"]), _.omit(b, ["id"]))
+    ).map((p) => p.id);
+    if (diffPermissions.length) {
+      await client.request(deletePermissions(diffPermissions));
+    }
+
+    // what exists in source but not in destination (create)
+    const newPermissions = _.differenceWith(
+      sourcePermissions,
+      destinationPermissions,
+      (a, b) => _.isEqual(_.omit(a, ["id"]), _.omit(b, ["id"]))
+    );
+    for (const permission of newPermissions) {
+      await client.request(createPermission(permission));
+    }
+  }
+
+  private retrieveDefaults = async () => {
+    // start by getting current user (expected to be admin)
+    const user = await client.request(readMe());
+
+    // get default role
+    const defaultRole = await client.request(readRole(user.role));
+
+    // get the policies associated with the default role (the api actually returns entities from directus_access as role.policies)
+    const defaultAccess = await callDirectusAPI<Record<string, any>[]>(
+      `access?filter=${encodeURIComponent(
+        JSON.stringify({ id: { _in: defaultRole.policies } })
+      )}`,
       "GET"
     );
-    await callDirectusAPI(
-      "access",
-      "DELETE",
-      access.map((a) => a.id)
+
+    return {
+      defaultRole: defaultRole.id,
+      defaultAccess: defaultAccess.map((p) => p.id),
+      defaultPolicy: defaultAccess.map((p) => p.policy),
+    };
+  };
+
+  private retrievePermissions = async (omitId = true) => {
+    const permissions = await client.request(
+      readPermissions({ filter: { id: { _nnull: true } } })
     );
-
-    // policies next
-    const policies = await client.request(readPolicies());
-    await client.request(deletePolicies(policies.map((policy) => policy.id)));
-
-    // roles last
-    const roles = await client.request(readRoles());
-    await client.request(deleteRoles(roles.map((role) => role.id)));
-
-    console.log("Roles, policies and access cleared successfully.");
-  }
+    if (omitId === false) return permissions.filter((p) => !!p.id);
+    else return permissions.filter((p) => !!p.id).map((p) => _.omit(p, ["id"]));
+  };
 }

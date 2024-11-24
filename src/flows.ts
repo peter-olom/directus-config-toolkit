@@ -28,6 +28,13 @@ export class FlowsManager {
     return record;
   }
 
+  emptyOperations(record: Record<string, any>) {
+    if (record["operations"]) {
+      record["operations"] = [];
+    }
+    return record;
+  }
+
   exportFlows = async () => {
     ensureConfigDirs();
     // flows are tied to operations, so we need to fetch all operations
@@ -40,7 +47,12 @@ export class FlowsManager {
     const flows = await client.request(readFlows());
     writeFileSync(
       this.flowPath,
-      JSON.stringify(flows.map(this.setUserNull), null, 2)
+      // empty operations because it is many-to-many relationship; relationship will be created when operations are imported
+      JSON.stringify(
+        flows.map(this.setUserNull).map(this.emptyOperations),
+        null,
+        2
+      )
     );
 
     console.log(`Flows exported to ${this.flowPath}`);
@@ -50,7 +62,7 @@ export class FlowsManager {
   importFlows = async () => {
     await this.handleImportFlows();
     await this.handleImportOperations();
-    console.log("Flows imported successfully.");
+    console.log("Flows and operations imported successfully.");
   };
 
   private async handleImportFlows() {
@@ -75,6 +87,7 @@ export class FlowsManager {
   }
 
   private async handleImportOperations() {
+    // get current user to set as user_created
     const sourceOperations = JSON.parse(
       readFileSync(this.operationPath, "utf8")
     );

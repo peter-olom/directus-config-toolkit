@@ -4,13 +4,17 @@ import {
   deleteFolders,
   readFiles,
   readFolders,
-  updateFile,
-  uploadFiles,
   updateFolder,
 } from "@directus/sdk";
-import { writeFileSync, readFileSync } from "fs";
+import { writeFileSync, readFileSync, createReadStream, statSync } from "fs";
 import { join } from "path";
-import { client, CONFIG_PATH, downloadFile, ensureConfigDirs } from "./helper";
+import {
+  client,
+  CONFIG_PATH,
+  downloadFile,
+  ensureConfigDirs,
+  restFileUpload,
+} from "./helper";
 import _ from "lodash";
 import FormData from "form-data";
 
@@ -21,20 +25,21 @@ export class FilesManager {
   private immutableFields = ["filename_disk", "filename_download"];
   constructor() {}
 
-  untrackIgnoredFields(record: Record<string, any>) {
-    return _.omit(record, ["storage", "uploaded_by", "modified_by"]);
-  }
+  untrackIgnoredFields = (record: Record<string, any>) => {
+    return _.pick(record, [
+      "id",
+      "title",
+      "type",
+      "folder",
+      "shouldBackup",
+      ...this.immutableFields,
+    ]);
+  };
 
   exportFiles = async () => {
     ensureConfigDirs();
     // backup folders first - only those with shouldBackup set to true
-    const folders = await client.request(
-      readFolders({
-        filter: {
-          shouldBackup: { _eq: true },
-        },
-      })
-    );
+    const folders = await this.getRemoteFolders();
     writeFileSync(this.folderPath, JSON.stringify(folders, null, 2));
 
     // backup files next
@@ -58,9 +63,10 @@ export class FilesManager {
   importFiles = async () => {
     // import folders first
     await this.handleImportFolders();
+    console.log("Folders imported successfully.");
+
     // import files next
     await this.handleImportFiles();
-
     console.log("Files imported successfully.");
   };
 
@@ -68,9 +74,7 @@ export class FilesManager {
     const sourceFolders: Record<string, any>[] = JSON.parse(
       readFileSync(this.folderPath, "utf8")
     );
-    const destinationFolders = await client.request(
-      readFolders({ filter: { shouldBackup: { _eq: true } } })
-    );
+    const destinationFolders = await this.getRemoteFolders();
 
     for (const folder of sourceFolders) {
       const existingFolder = destinationFolders.find((f) => f.id === folder.id);
@@ -97,33 +101,27 @@ export class FilesManager {
       readFiles({ filter: { shouldBackup: { _eq: true } } })
     );
 
-    const createFormData = (file: Record<string, any>) => {
-      const formData = new FormData();
-      Object.entries(file)
-        .filter(([key]) => !this.immutableFields.includes(key))
-        .forEach(([key, value]) => formData.append(key, value));
-
-      formData.append(
-        "file",
-        readFileSync(join(this.assetPath, file.filename_disk))
-      );
-      return formData;
-    };
-
-    // Process files
     const filePromises = sourceFiles.map(async (file) => {
-      const existingFile = destinationFiles.find((f) => f.id === file.id);
-      const formData = createFormData(file);
+      const existingFile = destinationFiles
+        .map(this.untrackIgnoredFields)
+        .find((f) => f.id === file.id);
+      const formData = this.createFormData(file);
 
       if (existingFile) {
         if (!_.isEqual(existingFile, file)) {
-          return client.request(updateFile(file.id, formData as any));
+          return restFileUpload(formData as any, file.id);
         }
+      } else {
+        // use axios to upload the file
+        return restFileUpload(formData as any);
       }
-      return client.request(uploadFiles(formData as any));
     });
 
-    await Promise.all(filePromises);
+    if (filePromises.length) {
+      await Promise.all(filePromises);
+    } else {
+      console.log("All files are in sync. No files to import.");
+    }
 
     // Clean up orphaned files
     const diffFiles = _.differenceBy(destinationFiles, sourceFiles, "id");
@@ -131,4 +129,66 @@ export class FilesManager {
       await client.request(deleteFiles(diffFiles.map((f) => f.id)));
     }
   };
+
+  private createFormData = (file: Record<string, any>) => {
+    const formData = new FormData();
+    const filePath = join(this.assetPath, file.filename_disk);
+    const fileStream = createReadStream(filePath);
+
+    // Append file metadata first
+    _.toPairs(file)
+      .filter(([key, value]) => !this.immutableFields.includes(key) && value)
+      .forEach(([key, value]) => {
+        // Convert non-primitive values to strings
+        if (typeof value === "object") {
+          value = JSON.stringify(value); // Serialize objects
+        } else if (typeof value === "boolean") {
+          value = value.toString(); // Convert booleans to strings
+        }
+        formData.append(key, value);
+      });
+
+    // Append file as stream with proper metadata
+    formData.append("file", fileStream as any, {
+      filename: file.filename_download,
+    });
+
+    return formData;
+  };
+
+  private async getRemoteFolders() {
+    // Get folders explicitly marked for backup
+    const markedFolders = await client.request(
+      readFolders({
+        filter: {
+          shouldBackup: { _eq: true },
+        },
+      })
+    );
+
+    // Get folders containing files marked for backup
+    const files = await client.request(
+      readFiles({
+        filter: {
+          shouldBackup: { _eq: true },
+          folder: { _nnull: true },
+        },
+      })
+    );
+
+    const folderIds = files
+      .map((file) => file.folder)
+      .filter((id): id is string => !!id);
+
+    const relatedFolders = await client.request(
+      readFolders({
+        filter: {
+          id: { _in: folderIds },
+        },
+      })
+    );
+
+    // Combine and deduplicate folders
+    return _.uniqBy([...markedFolders, ...relatedFolders], "id");
+  }
 }
