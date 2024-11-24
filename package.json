@@ -1,0 +1,38 @@
+{
+  "name": "directus-config-toolkit",
+  "version": "1.0.0",
+  "main": "./dist/index.js",
+  "type": "module",
+  "exports": "./dist/index.js",
+  "bin": {
+    "directus-ct": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "prepare": "npm run build"
+  },
+  "keywords": [],
+  "author": "Peter Olom",
+  "license": "MIT",
+  "description": "A toolkit for managing Directus configurations",
+  "dependencies": {
+    "@directus/sdk": "^18.0.0",
+    "axios": "^1.7.7",
+    "commander": "^11.0.0",
+    "dotenv": "^16.4.5",
+    "form-data": "^4.0.1",
+    "lodash": "^4.17.21"
+  },
+  "devDependencies": {
+    "@types/lodash": "^4.17.13",
+    "ts-node": "^10.9.2",
+    "tsup": "^7.2.0",
+    "typescript": "^5.0.0"
+  }
+}
