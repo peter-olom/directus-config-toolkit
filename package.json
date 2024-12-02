@@ -15,7 +15,6 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsup",
     "dev": "tsup --watch",
-    "prepare": "npm run build",
     "release": "release-it"
   },
   "keywords": [],
