@@ -6,7 +6,7 @@ import {
   readFolders,
   updateFolder,
 } from "@directus/sdk";
-import { writeFileSync, readFileSync, createReadStream, statSync } from "fs";
+import { writeFileSync, readFileSync, createReadStream } from "fs";
 import { join } from "path";
 import {
   client,

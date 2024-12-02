@@ -1,6 +1,6 @@
 # directus-config-toolkit
 
-`directus-config-toolkit` is a command-line utility designed to facilitate the export and import of Directus configurations, including flows, roles, settings, and files. This tool enables efficient management and version control of Directus configurations, ensuring consistency across different environments.
+`directus-config-toolkit` is a simple command-line utility designed to facilitate the export and import of Directus configurations, including flows, roles, settings, and files. This tool enables efficient management and version control of Directus configurations, ensuring consistency across different environments.
 
 ## Features
 
@@ -44,13 +44,16 @@ The toolkit supports the following commands:
 - `export <type>`: Export the specified configuration type.
 - `import <type>`: Import the specified configuration type.
 - `config`: Display the current API token and URL from the environment variables.
+- `export-all`: Exports all the configuration managed by this toolkit.
+- `import-all`: Imports all the configuration managed by this toolkit. It does this in a sequence that reduces chance of errors. This should be the goto choice when restoring on a new environment or in CI.
 
 Replace `<type>` with one of the following configuration types:
 
 - `flows`: Includes flows and operations.
-- `roles`: Includes roles, permissions, and access.
+- `roles`: Includes roles, policies, permissions, and access.
 - `settings`: Includes global settings.
 - `files`: Includes files and folders. Only items with the `shouldBackup` field set to `true` are backed up; ensure this field is added to the collection.
+- `schema`: Includes collects and all their fields
 
 ### Examples
 

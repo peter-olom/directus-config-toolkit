@@ -10,7 +10,6 @@ import {
   readPolicies,
   readRole,
   readRoles,
-  updatePermission,
   updatePolicy,
   updateRole,
 } from "@directus/sdk";
