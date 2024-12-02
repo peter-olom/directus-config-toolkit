@@ -1,6 +1,6 @@
 {
-  "name": "directus-config-toolkit",
-  "version": "1.0.0",
+  "name": "@devrue/directus-config-toolkit",
+  "version": "0.1.0",
   "main": "./dist/index.js",
   "type": "module",
   "exports": "./dist/index.js",
@@ -15,7 +15,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsup",
     "dev": "tsup --watch",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "release": "release-it"
   },
   "keywords": [],
   "author": "Peter Olom",
@@ -31,8 +32,20 @@
   },
   "devDependencies": {
     "@types/lodash": "^4.17.13",
+    "release-it": "^17.10.0",
     "ts-node": "^10.9.2",
     "tsup": "^7.2.0",
     "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/peter-olom/directus-config-toolkit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/peter-olom/directus-config-toolkit/issues"
+  },
+  "homepage": "https://github.com/peter-olom/directus-config-toolkit#readme",
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
