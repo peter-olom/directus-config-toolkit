@@ -31,6 +31,7 @@
     "lodash": "^4.17.21"
   },
   "devDependencies": {
+    "@release-it/conventional-changelog": "^9.0.3",
     "@types/lodash": "^4.17.13",
     "release-it": "^17.10.0",
     "ts-node": "^10.9.2",
@@ -47,5 +48,22 @@
   "homepage": "https://github.com/peter-olom/directus-config-toolkit#readme",
   "engines": {
     "node": ">=18.0.0"
+  },
+  "release-it": {
+    "git": {
+      "commitMessage": "chore: release ${version}",
+      "tagName": "v${version}"
+    },
+    "npm": {
+      "publish": true
+    },
+    "github": {
+      "release": true
+    },
+    "plugins": {
+      "@release-it/conventional-changelog": {
+        "preset": "angular"
+      }
+    }
   }
 }
