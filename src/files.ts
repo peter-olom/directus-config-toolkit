@@ -180,13 +180,16 @@ export class FilesManager {
       .map((file) => file.folder)
       .filter((id): id is string => !!id);
 
-    const relatedFolders = await client.request(
-      readFolders({
-        filter: {
-          id: { _in: folderIds },
-        },
-      })
-    );
+    const relatedFolders =
+      folderIds.length > 0
+        ? await client.request(
+            readFolders({
+              filter: {
+                id: { _in: folderIds },
+              },
+            })
+          )
+        : [];
 
     // Combine and deduplicate folders
     return _.uniqBy([...markedFolders, ...relatedFolders], "id");
