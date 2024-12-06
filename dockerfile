@@ -18,8 +18,8 @@ RUN npm run build
 # Production stage
 FROM node:20-alpine3.19
 
-# Install curl for healthcheck
-RUN apk add --no-cache curl
+# Install curl and jq for healthcheck and json parsing
+RUN apk add --no-cache curl jq
 
 WORKDIR /app
 

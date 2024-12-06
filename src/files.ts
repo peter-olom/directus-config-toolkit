@@ -180,6 +180,8 @@ export class FilesManager {
       .map((file) => file.folder)
       .filter((id): id is string => !!id);
 
+    console.log("Related folderIds", folderIds);
+
     const relatedFolders =
       folderIds.length > 0
         ? await client.request(
