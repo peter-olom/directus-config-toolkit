@@ -13,6 +13,13 @@ import { join } from "path";
 import { client, CONFIG_PATH, ensureConfigDirs } from "./helper";
 import _ from "lodash";
 
+interface DirectusOperation {
+  id: string;
+  resolve: string | null;
+  reject: string | null;
+  [key: string]: any;
+}
+
 /**
  * FlowsManager is a class that handles exporting and importing flows.
  */
@@ -87,13 +94,15 @@ export class FlowsManager {
   }
 
   private async handleImportOperations() {
-    // get current user to set as user_created
     const sourceOperations = JSON.parse(
       readFileSync(this.operationPath, "utf8")
     );
     const destinationOperations = await client.request(readOperations());
 
-    for (const operation of sourceOperations) {
+    // Sort operations based on dependencies
+    const sortedOperations = this.sortOperationsByDependency(sourceOperations);
+
+    for (const operation of sortedOperations) {
       const existingOperation = destinationOperations.find(
         (o) => o.id === operation.id
       );
@@ -114,5 +123,40 @@ export class FlowsManager {
     if (diffOperations.length) {
       await client.request(deleteOperations(diffOperations.map((o) => o.id)));
     }
+  }
+
+  private sortOperationsByDependency(
+    operations: DirectusOperation[]
+  ): DirectusOperation[] {
+    const sorted: DirectusOperation[] = [];
+    const visited = new Set<string>();
+
+    // First, add all operations with no dependencies
+    operations.forEach((operation) => {
+      if (!operation.resolve && !operation.reject) {
+        sorted.push(operation);
+        visited.add(operation.id);
+      }
+    });
+
+    // Then, repeatedly find and add operations whose dependencies are satisfied
+    let added: boolean;
+    do {
+      added = false;
+      operations.forEach((operation) => {
+        if (!visited.has(operation.id)) {
+          const dependencies = [operation.resolve, operation.reject].filter(
+            (dep): dep is string => dep !== null
+          );
+          if (dependencies.every((depId) => visited.has(depId))) {
+            sorted.push(operation);
+            visited.add(operation.id);
+            added = true;
+          }
+        }
+      });
+    } while (added);
+
+    return sorted;
   }
 }
