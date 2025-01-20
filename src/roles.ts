@@ -30,28 +30,28 @@ export class RolesManager {
   private permissionsPath: string = join(CONFIG_PATH, "permissions.json");
   constructor() {}
 
-  emptyPolicies(record: Record<string, any>) {
+  private emptyPolicies(record: Record<string, any>) {
     if (record["policies"]) {
       record["policies"] = [];
     }
     return record;
   }
 
-  emptyUsers(record: Record<string, any>) {
+  private untrackUsers(record: Record<string, any>) {
     if (record["users"]) {
-      record["users"] = [];
+      delete record["users"];
     }
     return record;
   }
 
-  emptyRoles(record: Record<string, any>) {
+  private emptyRoles(record: Record<string, any>) {
     if (record["roles"]) {
       record["roles"] = [];
     }
     return record;
   }
 
-  emptyPermissions(record: Record<string, any>) {
+  private emptyPermissions(record: Record<string, any>) {
     if (record["permissions"]) {
       record["permissions"] = [];
     }
@@ -67,21 +67,24 @@ export class RolesManager {
     writeFileSync(
       this.rolePath,
       JSON.stringify(
-        roles.filter((r) => r.id != defaults.defaultRole).map(this.emptyUsers),
+        roles
+          .filter((r) => r.id != defaults.defaultRole)
+          .map(this.untrackUsers)
+          .map(this.emptyPolicies),
         null,
         2
       )
     );
 
     // backup policies next (excluding the default policies)
-    // drain roles and permissions from policies - they will be re-created on import access and permissions
+    // drain all relations to policies. They're created by access and permissions
     const policies = await client.request(readPolicies());
     writeFileSync(
       this.policiesPath,
       JSON.stringify(
         policies
           .filter((p) => !defaults.defaultPolicy.includes(p.id))
-          .map(this.emptyUsers)
+          .map(this.untrackUsers)
           .map(this.emptyRoles)
           .map(this.emptyPermissions),
         null,

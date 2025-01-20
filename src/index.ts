@@ -109,7 +109,7 @@ program
   .description("Print API token and URL from environment")
   .action(printConfig);
 
-const syncSequence: ConfigType[] = [
+const SYNC_SEQUENCE: ConfigType[] = [
   "schema",
   "files",
   "settings",
@@ -121,9 +121,9 @@ program
   .command("export-all")
   .description("Export all configurations in sequence")
   .action(async () => {
-    console.log("Running sync sequence:", syncSequence.join(" -> "));
+    console.log("Running sync sequence:", SYNC_SEQUENCE.join(" -> "));
     try {
-      for (const type of syncSequence) {
+      for (const type of SYNC_SEQUENCE) {
         console.log(`Exporting ${type}...`);
         const manager = managers[type];
         const exportMethod =
@@ -150,9 +150,9 @@ program
   .command("import-all")
   .description("Import all configurations in sequence")
   .action(async () => {
-    console.log("Running sync sequence:", syncSequence.join(" -> "));
+    console.log("Running sync sequence:", SYNC_SEQUENCE.join(" -> "));
     try {
-      for (const type of syncSequence) {
+      for (const type of SYNC_SEQUENCE) {
         console.log(`Importing ${type}...`);
         const manager = managers[type];
         const importMethod =
@@ -170,7 +170,7 @@ program
       }
       console.log("All imports completed successfully");
     } catch (error) {
-      console.error("Import-all failed:", error);
+      console.error("Import-all failed:", JSON.stringify(error));
       process.exit(1);
     }
   });
