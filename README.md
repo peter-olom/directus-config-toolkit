@@ -52,7 +52,7 @@ Replace `<type>` with one of the following configuration types:
 - `flows`: Includes flows and operations.
 - `roles`: Includes roles, policies, permissions, and access.
 - `settings`: Includes global settings.
-- `files`: Includes files and folders. Only items with the `shouldBackup` field set to `true` are backed up; ensure this field is added to the collection.
+- `files`: Includes files and folders. Only items with the `shouldBackup` or `should_backup` field set to `true` are backed up; ensure this field is added to the collection.
 - `schema`: Includes collects and all their fields
 
 ### Examples

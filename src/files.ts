@@ -23,18 +23,43 @@ export class FilesManager {
   private folderPath: string = join(CONFIG_PATH, "folders.json");
   private assetPath: string = join(CONFIG_PATH, "assets");
   private immutableFields = ["filename_disk", "filename_download"];
+  private shouldBackupFilter = {
+    _or: [{ shouldBackup: { _eq: true } }, { should_backup: { _eq: true } }],
+  };
+
+  private isMarkedForBackup = (item: Record<string, any>) => {
+    return item.shouldBackup === true || item.should_backup === true;
+  };
+
   constructor() {}
 
   untrackIgnoredFields = (record: Record<string, any>) => {
+    const baseFields = ["id", "title", "type", "folder"];
+    const backupField =
+      "shouldBackup" in record
+        ? "shouldBackup"
+        : "should_backup" in record
+        ? "should_backup"
+        : null;
+
     return _.pick(record, [
-      "id",
-      "title",
-      "type",
-      "folder",
-      "shouldBackup",
+      ...baseFields,
+      ...(backupField ? [backupField] : []),
       ...this.immutableFields,
     ]);
   };
+
+  private async handleFieldPermissionError(error: any, context: string) {
+    if (
+      JSON.stringify(error).includes(
+        "You don't have permission to access field"
+      )
+    ) {
+      console.warn(`Warning: ${context} - ${error.message}`);
+      return [];
+    }
+    throw error;
+  }
 
   exportFiles = async () => {
     ensureConfigDirs();
@@ -43,9 +68,18 @@ export class FilesManager {
     writeFileSync(this.folderPath, JSON.stringify(folders, null, 2));
 
     // backup files next
-    const files = await client.request(
-      readFiles({ filter: { shouldBackup: { _eq: true } } })
-    );
+    let files: Record<string, any>[] = [];
+    try {
+      files = await client.request(
+        readFiles({ filter: this.shouldBackupFilter })
+      );
+    } catch (error) {
+      files = await this.handleFieldPermissionError(
+        error,
+        "Error reading files with backup filter"
+      );
+    }
+
     writeFileSync(
       this.filePath,
       JSON.stringify(files.map(this.untrackIgnoredFields), null, 2)
@@ -98,7 +132,7 @@ export class FilesManager {
       readFileSync(this.filePath, "utf8")
     );
     const destinationFiles = await client.request(
-      readFiles({ filter: { shouldBackup: { _eq: true } } })
+      readFiles({ filter: this.shouldBackupFilter })
     );
 
     const filePromises = sourceFiles.map(async (file) => {
@@ -157,24 +191,38 @@ export class FilesManager {
   };
 
   private async getRemoteFolders() {
-    // Get folders explicitly marked for backup
-    const markedFolders = await client.request(
-      readFolders({
-        filter: {
-          shouldBackup: { _eq: true },
-        },
-      })
-    );
+    let markedFolders: Record<string, any>[] = [];
+    let files: Record<string, any>[] = [];
 
-    // Get folders containing files marked for backup
-    const files = await client.request(
-      readFiles({
-        filter: {
-          shouldBackup: { _eq: true },
-          folder: { _nnull: true },
-        },
-      })
-    );
+    try {
+      // Get folders explicitly marked for backup
+      markedFolders = await client.request(
+        readFolders({
+          filter: this.shouldBackupFilter,
+        })
+      );
+    } catch (error) {
+      markedFolders = await this.handleFieldPermissionError(
+        error,
+        "Error reading folders with backup filter"
+      );
+    }
+
+    try {
+      // Get folders containing files marked for backup
+      files = await client.request(
+        readFiles({
+          filter: {
+            _and: [this.shouldBackupFilter, { folder: { _nnull: true } }],
+          },
+        })
+      );
+    } catch (error) {
+      files = await this.handleFieldPermissionError(
+        error,
+        "Error reading files with folder filter"
+      );
+    }
 
     const folderIds = files
       .map((file) => file.folder)
@@ -182,16 +230,20 @@ export class FilesManager {
 
     console.log("Related folderIds", folderIds);
 
-    const relatedFolders =
-      folderIds.length > 0
-        ? await client.request(
-            readFolders({
-              filter: {
-                id: { _in: folderIds },
-              },
-            })
-          )
-        : [];
+    let relatedFolders: Record<string, any>[] = [];
+    if (folderIds.length > 0) {
+      try {
+        relatedFolders = await client.request(
+          readFolders({
+            filter: {
+              id: { _in: folderIds },
+            },
+          })
+        );
+      } catch {
+        console.warn(`Warning: Error reading related folders`);
+      }
+    }
 
     // Combine and deduplicate folders
     return _.uniqBy([...markedFolders, ...relatedFolders], "id");
