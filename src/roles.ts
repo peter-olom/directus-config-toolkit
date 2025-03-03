@@ -23,6 +23,12 @@ import {
   ensureConfigDirs,
 } from "./helper";
 
+interface Defaults {
+  defaultRole: any;
+  defaultAccess: any[];
+  defaultPolicy: any[];
+}
+
 export class RolesManager {
   private rolePath: string = join(CONFIG_PATH, "roles.json");
   private policiesPath: string = join(CONFIG_PATH, "policies.json");
@@ -58,83 +64,107 @@ export class RolesManager {
     return record;
   }
 
-  exportRoles = async () => {
-    ensureConfigDirs();
-    const defaults = await this.retrieveDefaults();
+  /**
+   * Prepares an array of policies
+   */
+  private preparePolicies(
+    policies: Record<string, any>[]
+  ): Record<string, any>[] {
+    return policies.map((policy) =>
+      this.emptyPermissions(this.emptyRoles(this.untrackUsers({ ...policy })))
+    );
+  }
 
-    // backup roles first (excluding the default role)
+  /**
+   * Prepares an array of roles
+   */
+  private prepareRoles(roles: Record<string, any>[]): Record<string, any>[] {
+    return roles.map((role) =>
+      this.emptyPolicies(this.untrackUsers({ ...role }))
+    );
+  }
+
+  /**
+   * Prepares access entries
+   */
+  private prepareAccess(access: Record<string, any>[]): Record<string, any>[] {
+    // Deep clone to avoid modifying original objects
+    return access.map((entry) => ({ ...entry }));
+  }
+
+  private async exportRolesData(defaults: Defaults) {
     const roles = await client.request(readRoles());
-    writeFileSync(
-      this.rolePath,
-      JSON.stringify(
-        roles
-          .filter((r) => r.id != defaults.defaultRole)
-          .map(this.untrackUsers)
-          .map(this.emptyPolicies),
-        null,
-        2
-      )
-    );
+    const filteredRoles = roles.filter((r) => r.id != defaults.defaultRole);
+    const preparedRoles = this.prepareRoles(filteredRoles);
 
-    // backup policies next (excluding the default policies)
-    // drain all relations to policies. They're created by access and permissions
+    writeFileSync(this.rolePath, JSON.stringify(preparedRoles, null, 2));
+    console.log(`Roles exported to ${this.rolePath}`);
+  }
+
+  private async exportPoliciesData(defaults: Defaults) {
     const policies = await client.request(readPolicies());
-    writeFileSync(
-      this.policiesPath,
-      JSON.stringify(
-        policies
-          .filter((p) => !defaults.defaultPolicy.includes(p.id))
-          .map(this.untrackUsers)
-          .map(this.emptyRoles)
-          .map(this.emptyPermissions),
-        null,
-        2
-      )
+    const filteredPolicies = policies.filter(
+      (p) => !defaults.defaultPolicy.includes(p.id)
     );
+    const preparedPolicies = this.preparePolicies(filteredPolicies);
 
-    // backup none-user access entries (excluding the default access)
+    writeFileSync(this.policiesPath, JSON.stringify(preparedPolicies, null, 2));
+    console.log(`Policies exported to ${this.policiesPath}`);
+  }
+
+  private async exportAccessData(defaults: Defaults) {
     const access = await callDirectusAPI<Record<string, any>[]>(
       "access?filter[user][_null]=true",
       "GET"
     );
-    writeFileSync(
-      this.accessPath,
-      JSON.stringify(
-        access.filter((a) => !defaults.defaultAccess.includes(a.id)),
-        null,
-        2
-      )
+    const filteredAccess = access.filter(
+      (a) => !defaults.defaultAccess.includes(a.id)
     );
+    const preparedAccess = this.prepareAccess(filteredAccess);
 
-    // backup permissions - only permissions where id is set
+    writeFileSync(this.accessPath, JSON.stringify(preparedAccess, null, 2));
+    console.log(`Access exported to ${this.accessPath}`);
+  }
+
+  private async exportPermissionsData() {
     const permissions = await this.retrievePermissions();
     writeFileSync(this.permissionsPath, JSON.stringify(permissions, null, 2));
-
-    console.log(`Roles exported to ${this.rolePath}`);
-    console.log(`Policies exported to ${this.policiesPath}`);
-    console.log(`Access exported to ${this.accessPath}`);
     console.log(`Permissions exported to ${this.permissionsPath}`);
-  };
+  }
 
-  importRoles = async () => {
-    await this.handleImportRoles();
-    await this.handleImportPolicies();
-    await this.handleImportAccess();
-    await this.handleImportPermissions();
-    console.log(
-      "Roles, policies, access and permissions imported successfully."
-    );
+  exportRoles = async () => {
+    ensureConfigDirs();
+    const defaults = await this.retrieveDefaults();
+
+    await this.exportRolesData(defaults);
+    await this.exportPoliciesData(defaults);
+    await this.exportAccessData(defaults);
+    await this.exportPermissionsData();
   };
 
   private async handleImportRoles() {
     const defaults = await this.retrieveDefaults();
-    const sourceRoles = JSON.parse(readFileSync(this.rolePath, "utf8"));
-    const destinationRoles = await client.request(readRoles());
+    const incomingRoles = JSON.parse(readFileSync(this.rolePath, "utf8"));
+    const existingRoles = await client.request(readRoles());
 
-    for (const role of sourceRoles) {
-      const existingRole = destinationRoles.find((r) => r.id === role.id);
+    // Prepare roles like during export
+    const preparedIncomingRoles = this.prepareRoles(incomingRoles);
+    const preparedExistingRoles = this.prepareRoles(
+      existingRoles.filter((r) => r.id !== defaults.defaultRole)
+    );
+
+    for (const role of incomingRoles) {
+      const existingRole = existingRoles.find((r) => r.id === role.id);
       if (existingRole) {
-        if (!_.isEqual(existingRole, role)) {
+        // Compare prepared versions
+        const preparedExisting = preparedExistingRoles.find(
+          (r) => r.id === role.id
+        );
+        const preparedIncoming = preparedIncomingRoles.find(
+          (r) => r.id === role.id
+        );
+
+        if (!_.isEqual(preparedExisting, preparedIncoming)) {
           await client.request(updateRole(role.id, role));
         }
       } else {
@@ -143,11 +173,9 @@ export class RolesManager {
     }
 
     // delete roles that are not in the source (excluding the default role)
-    const diffRoles = _.differenceBy(
-      destinationRoles,
-      sourceRoles,
-      "id"
-    ).filter((r) => r.id !== defaults.defaultRole);
+    const diffRoles = _.differenceBy(existingRoles, incomingRoles, "id").filter(
+      (r) => r.id !== defaults.defaultRole
+    );
     if (diffRoles.length) {
       await client.request(deleteRoles(diffRoles.map((r) => r.id)));
     }
@@ -155,15 +183,30 @@ export class RolesManager {
 
   private async handleImportPolicies() {
     const defaults = await this.retrieveDefaults();
-    const sourcePolicies = JSON.parse(readFileSync(this.policiesPath, "utf8"));
-    const destinationPolicies = await client.request(readPolicies());
+    const incomingPolicies = JSON.parse(
+      readFileSync(this.policiesPath, "utf8")
+    );
+    const existingPolicies = await client.request(readPolicies());
 
-    for (const policy of sourcePolicies) {
-      const existingPolicy = destinationPolicies.find(
-        (p) => p.id === policy.id
-      );
+    // Filter and prepare policies using the same transformations as in export
+    const preparedIncomingPolicies = this.preparePolicies(incomingPolicies);
+    const preparedExistingPolicies = this.preparePolicies(
+      existingPolicies.filter((p) => !defaults.defaultPolicy.includes(p.id))
+    );
+
+    for (const policy of incomingPolicies) {
+      const existingPolicy = existingPolicies.find((p) => p.id === policy.id);
       if (existingPolicy) {
-        if (!_.isEqual(existingPolicy, policy)) {
+        // Compare prepared versions from the arrays
+        const preparedExisting = preparedExistingPolicies.find(
+          (p) => p.id === policy.id
+        );
+        const preparedIncoming = preparedIncomingPolicies.find(
+          (p) => p.id === policy.id
+        );
+
+        if (!_.isEqual(preparedExisting, preparedIncoming)) {
+          console.log("Updating policy", policy.id);
           await client.request(updatePolicy(policy.id, policy));
         }
       } else {
@@ -173,8 +216,8 @@ export class RolesManager {
 
     // delete policies that are not in the source (excluding the default policies)
     const diffPolicies = _.differenceBy(
-      destinationPolicies,
-      sourcePolicies,
+      existingPolicies,
+      incomingPolicies,
       "id"
     ).filter((p) => !defaults.defaultPolicy.includes(p.id));
     if (diffPolicies.length) {
@@ -184,16 +227,30 @@ export class RolesManager {
 
   private async handleImportAccess() {
     const defaults = await this.retrieveDefaults();
-    const sourceAccess = JSON.parse(readFileSync(this.accessPath, "utf8"));
-    const destinationAccess = await callDirectusAPI<Record<string, any>[]>(
+    const incomingAccess = JSON.parse(readFileSync(this.accessPath, "utf8"));
+    const existingAccess = await callDirectusAPI<Record<string, any>[]>(
       "access?filter[user][_null]=true",
       "GET"
     );
 
-    for (const access of sourceAccess) {
-      const existingAccess = destinationAccess.find((a) => a.id === access.id);
-      if (existingAccess) {
-        if (!_.isEqual(existingAccess, access)) {
+    // Prepare access entries like during export
+    const preparedIncomingAccess = this.prepareAccess(incomingAccess);
+    const preparedExistingAccess = this.prepareAccess(
+      existingAccess.filter((a) => !defaults.defaultAccess.includes(a.id))
+    );
+
+    for (const access of incomingAccess) {
+      const existingEntry = existingAccess.find((a) => a.id === access.id);
+      if (existingEntry) {
+        // Compare prepared versions from the arrays
+        const preparedExisting = preparedExistingAccess.find(
+          (a) => a.id === access.id
+        );
+        const preparedIncoming = preparedIncomingAccess.find(
+          (a) => a.id === access.id
+        );
+
+        if (!_.isEqual(preparedExisting, preparedIncoming)) {
           await callDirectusAPI(`access/${access.id}`, "PATCH", access);
         }
       } else {
@@ -201,12 +258,13 @@ export class RolesManager {
       }
     }
 
-    // delete access that are not in the source (excluding the default access)
+    // delete access that are not in the source (excluding the default access and those with users)
     const diffAccess = _.differenceBy(
-      destinationAccess,
-      sourceAccess,
+      existingAccess,
+      incomingAccess,
       "id"
-    ).filter((a) => !defaults.defaultAccess.includes(a.id));
+    ).filter((a) => !defaults.defaultAccess.includes(a.id) && !a.user);
+
     if (diffAccess.length) {
       await callDirectusAPI(
         "access",
@@ -220,14 +278,14 @@ export class RolesManager {
     const sourcePermissions: Record<string, any>[] = JSON.parse(
       readFileSync(this.permissionsPath, "utf8")
     );
-    const destinationPermissions = await this.retrievePermissions(false);
+    const incomingPermissions = await this.retrievePermissions(false);
 
     // for permissions, id is AUTO_INCREMENT IDENTITY_INSERT,
     // so we need to create new permissions and delete obsolete ones on the destination (no updates)
 
     // what exists in destination but not in source (delete)
     const diffPermissions = _.differenceWith(
-      destinationPermissions,
+      incomingPermissions,
       sourcePermissions,
       (a, b) => _.isEqual(_.omit(a, ["id"]), _.omit(b, ["id"]))
     ).map((p) => p.id);
@@ -238,7 +296,7 @@ export class RolesManager {
     // what exists in source but not in destination (create)
     const newPermissions = _.differenceWith(
       sourcePermissions,
-      destinationPermissions,
+      incomingPermissions,
       (a, b) => _.isEqual(_.omit(a, ["id"]), _.omit(b, ["id"]))
     );
     for (const permission of newPermissions) {
@@ -274,5 +332,15 @@ export class RolesManager {
     );
     if (omitId === false) return permissions.filter((p) => !!p.id);
     else return permissions.filter((p) => !!p.id).map((p) => _.omit(p, ["id"]));
+  };
+
+  importRoles = async () => {
+    await this.handleImportRoles();
+    await this.handleImportPolicies();
+    await this.handleImportAccess();
+    await this.handleImportPermissions();
+    console.log(
+      "Roles, policies, access and permissions imported successfully."
+    );
   };
 }

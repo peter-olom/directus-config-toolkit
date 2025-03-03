@@ -73,10 +73,10 @@ export class FlowsManager {
   };
 
   private async handleImportFlows() {
-    const sourceFlows = JSON.parse(readFileSync(this.flowPath, "utf8"));
+    const incompingFlows = JSON.parse(readFileSync(this.flowPath, "utf8"));
     const destinationFlows = await client.request(readFlows());
 
-    for (const flow of sourceFlows) {
+    for (const flow of incompingFlows) {
       const existingFlow = destinationFlows.find((f) => f.id === flow.id);
       if (existingFlow) {
         if (_.isEqual(existingFlow, flow)) {
@@ -87,20 +87,21 @@ export class FlowsManager {
       }
     }
 
-    const diffFlows = _.differenceBy(destinationFlows, sourceFlows, "id");
+    const diffFlows = _.differenceBy(destinationFlows, incompingFlows, "id");
     if (diffFlows.length) {
       await client.request(deleteFlows(diffFlows.map((f) => f.id)));
     }
   }
 
   private async handleImportOperations() {
-    const sourceOperations = JSON.parse(
+    const incomingOperations = JSON.parse(
       readFileSync(this.operationPath, "utf8")
     );
     const destinationOperations = await client.request(readOperations());
 
     // Sort operations based on dependencies
-    const sortedOperations = this.sortOperationsByDependency(sourceOperations);
+    const sortedOperations =
+      this.sortOperationsByDependency(incomingOperations);
 
     for (const operation of sortedOperations) {
       const existingOperation = destinationOperations.find(
@@ -117,7 +118,7 @@ export class FlowsManager {
 
     const diffOperations = _.differenceBy(
       destinationOperations,
-      sourceOperations,
+      incomingOperations,
       "id"
     );
     if (diffOperations.length) {
