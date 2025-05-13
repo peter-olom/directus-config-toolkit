@@ -48,7 +48,7 @@ export default function DiffViewer({ differences, onClose }: DiffViewerProps) {
 
   return (
     <div className="fixed inset-0 bg-black/80 dark:bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-card border border-card-border rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+      <div className="bg-white dark:bg-gray-900 border border-card-border rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between p-4 border-b border-card-border bg-card-header">
           <h2 className="font-semibold text-lg text-foreground">
             Configuration Differences
