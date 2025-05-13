@@ -51,6 +51,7 @@ The toolkit supports the following commands:
   - Use `--continue-on-error` flag to continue the import sequence even if one type fails.
 - `snapshot create`: Create a snapshot of the current Directus instance state.
 - `snapshot compare`: Compare the current snapshot with configuration files to identify differences.
+- `snapshot roles`: Check role identities between environments to identify roles that need mapping.
 - `validate`: Check configuration files for potential import issues like duplicate IDs.
 
 Replace `<type>` with one of the following configuration types:
@@ -120,6 +121,30 @@ directus-ct snapshot create
 directus-ct snapshot compare
 ```
 
+### Special Role Handling
+
+The toolkit has enhanced handling for special roles:
+
+#### Administrator Roles
+
+- Administrator roles (with `admin_access: true`) are automatically excluded from backup/import process
+- This prevents accidentally overwriting critical admin roles between environments
+- The toolkit identifies admin roles during export and skips them during import
+
+#### Public Role
+
+- The Public role often has different IDs between environments but needs to be treated as the same role
+- The toolkit automatically identifies Public roles by name and icon properties
+- During import, it maps Public roles between environments by these characteristics, not by ID
+- This ensures permissions and settings referencing the Public role are correctly preserved between environments
+
+#### Role Import Safety
+
+- Only non-admin roles from the source environment are imported
+- Admin roles in the target environment are never deleted
+- Duplicate detection ensures roles don't get created redundantly
+- Detailed logging shows which roles are being processed, updated, or skipped
+
 ### Order of Import
 
 The tool imports configurations in the following sequence to minimize dependency issues:
@@ -137,6 +162,26 @@ For more detailed debugging:
 1. Enable verbose logging by setting `DEBUG=1` in your environment variables
 2. Use the snapshot comparison feature to identify differences between environments
 3. Check the snapshot diff files in the `config/snapshot` directory for detailed information
+
+### Error Handling Improvements
+
+The toolkit now includes enhanced error handling mechanisms:
+
+- **Detailed Error Messages**: Each component provides specific error information rather than generic failure messages
+- **Role Identity Validation**: Use `snapshot roles` to check for role identity issues between environments
+- **Import Component Isolation**: Each part of the import process (roles, policies, access, permissions) runs separately, showing specific success/failure for each
+- **Retry Mechanism**: Critical operations include automatic retries with exponential backoff for better resilience
+- **Foreign Key Detection**: The tool detects and reports foreign key constraint issues with helpful suggestions
+
+Example of improved error reporting:
+
+```
+=== Role Import Summary ===
+✅ roles: Roles imported successfully
+✅ policies: Policies imported successfully
+✅ access: Access entries imported successfully
+❌ permissions: Foreign key constraint error: directus_permissions_role_foreign
+```
 
 ## Contributing
 

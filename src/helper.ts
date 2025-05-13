@@ -126,11 +126,59 @@ export const downloadFile = async (file: Record<string, any>, retries = 3) => {
   }
 };
 
-export const printConfig = () => {
+/**
+ * Print configuration details including environment variables
+ * and connection information for debugging
+ */
+export function printConfig() {
+  console.log("=== Directus Config Toolkit Configuration ===");
   console.log(`API URL: ${API_URL}`);
-  console.log(`API Token: ${TOKEN}`);
-  console.log(`Config Path: ${CONFIG_PATH}`);
-};
+  console.log(
+    `Token: ${TOKEN.substring(0, 4)}...${TOKEN.substring(TOKEN.length - 4)}`
+  );
+  console.log(`Config path: ${CONFIG_PATH}`);
+
+  // Show environment variables
+  console.log("\nEnvironment Variables:");
+  console.log(`DIRECTUS_CT_URL: ${process.env.DIRECTUS_CT_URL || "(not set)"}`);
+  console.log(
+    `DIRECTUS_CT_TOKEN: ${
+      process.env.DIRECTUS_CT_TOKEN ? "(set)" : "(not set)"
+    }`
+  );
+  console.log(
+    `DIRECTUS_CT_CONFIG_PATH: ${
+      process.env.DIRECTUS_CT_CONFIG_PATH || "(not set)"
+    }`
+  );
+
+  // Debug information about Node.js
+  console.log("\nNode.js Environment:");
+  console.log(`Node version: ${process.version}`);
+  console.log(`Process CWD: ${process.cwd()}`);
+
+  // Test connection
+  console.log("\nTesting connection...");
+  axios({
+    url: `${API_URL}/server/ping`,
+    method: "GET",
+    timeout: 5000, // 5 second timeout
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+    },
+  })
+    .then(() => {
+      console.log("✅ Connection successful");
+    })
+    .catch((error) => {
+      console.log("❌ Connection failed");
+      console.log(`Status: ${error.response?.status || "Unknown"}`);
+      console.log(`Message: ${error.message || "Unknown error"}`);
+      if (error.response?.data) {
+        console.log("Response data:", error.response.data);
+      }
+    });
+}
 
 export const restFileUpload = async (
   formData: FormData,
@@ -202,3 +250,92 @@ export const restFileUpload = async (
 
   throw lastError;
 };
+
+/**
+ * Extract a meaningful error message from various error types
+ * @param error Any error that might be thrown during API calls
+ * @returns A clean, readable error message
+ */
+export function extractErrorMessage(error: any): string {
+  if (!error) return "Unknown error";
+
+  // Handle Directus API error responses
+  if (error.response && error.response.data) {
+    const { errors } = error.response.data;
+
+    if (Array.isArray(errors) && errors.length > 0) {
+      // Format Directus API error
+      return errors
+        .map((e) => e.message || e.extensions?.code || JSON.stringify(e))
+        .join(", ");
+    }
+
+    // Handle SQL error messages that might be in the response
+    if (
+      error.response.data.message &&
+      error.response.data.message.includes("FOREIGN KEY constraint")
+    ) {
+      return `Foreign key constraint error: ${extractConstraintName(
+        error.response.data.message
+      )}`;
+    }
+
+    // Other response data
+    if (error.response.data.message) {
+      return error.response.data.message;
+    }
+
+    return JSON.stringify(error.response.data);
+  }
+
+  // Handle standard error objects
+  if (error.message) {
+    return error.message;
+  }
+
+  // As a fallback, stringify the error
+  return typeof error === "string" ? error : JSON.stringify(error);
+}
+
+/**
+ * Extract constraint name from SQL error messages
+ */
+function extractConstraintName(message: string): string {
+  // Match patterns like "The constraint 'xyz_constraint' was violated"
+  const constraintMatch = message.match(/constraint ['"]([^'"]+)['"]/i);
+
+  if (constraintMatch && constraintMatch[1]) {
+    return constraintMatch[1];
+  }
+
+  // Return the original message if no match found
+  return message;
+}
+
+/**
+ * Retry a function call with exponential backoff
+ */
+export async function retryOperation<T>(
+  operation: () => Promise<T>,
+  retries = 3,
+  delay = 1000,
+  verbose = false
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (retries === 0) {
+      throw error;
+    }
+
+    if (verbose) {
+      console.log(
+        `Operation failed, retrying in ${delay}ms... (${retries} retries left)`
+      );
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delay));
+
+    return retryOperation(operation, retries - 1, delay * 2, verbose);
+  }
+}

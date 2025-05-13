@@ -8,7 +8,9 @@ import { SettingsManager } from "./settings";
 import { FilesManager } from "./files";
 import { SchemaManager } from "./schema";
 import { SnapshotManager } from "./snapshot";
-import { printConfig } from "./helper";
+import { printConfig, client } from "./helper";
+import { readMe } from "@directus/sdk";
+import checkEnvironment from "./utils/checkEnv";
 
 type ConfigType = "flows" | "roles" | "settings" | "files" | "schema";
 
@@ -217,9 +219,11 @@ program
   });
 
 // Add snapshot commands
-program
+const snapshotCommand = program
   .command("snapshot")
-  .description("Create and manage snapshots of Directus instance state")
+  .description("Create and manage snapshots of Directus instance state");
+
+snapshotCommand
   .command("create")
   .description("Create a snapshot of the current Directus instance state")
   .action(async () => {
@@ -231,8 +235,7 @@ program
     }
   });
 
-program
-  .command("snapshot")
+snapshotCommand
   .command("compare")
   .description("Compare snapshot with configuration files")
   .action(async () => {
@@ -240,6 +243,30 @@ program
       await snapshotManager.compareWithConfig();
     } catch (error) {
       console.error("Snapshot comparison failed:", error);
+      process.exit(1);
+    }
+  });
+
+snapshotCommand
+  .command("roles")
+  .description("Check role identities between environments")
+  .action(async () => {
+    try {
+      await snapshotManager.checkRoleIdentities();
+    } catch (error) {
+      console.error("Role identity check failed:", error);
+      process.exit(1);
+    }
+  });
+
+snapshotCommand
+  .command("policies")
+  .description("Check public policy identities between environments")
+  .action(async () => {
+    try {
+      await snapshotManager.checkPublicPolicyIdentities();
+    } catch (error) {
+      console.error("Public policy identity check failed:", error);
       process.exit(1);
     }
   });
@@ -252,6 +279,85 @@ program
       await snapshotManager.findDuplicateIds();
     } catch (error) {
       console.error("Validation failed:", error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("debug")
+  .description("Debug connection and authentication issues")
+  .action(async () => {
+    try {
+      printConfig(); // This will show basic configuration
+
+      // Add more thorough connection testing
+      console.log("Performing additional diagnostics...");
+
+      // First test the connection without auth
+      try {
+        const response = await fetch(
+          `${process.env.DIRECTUS_CT_URL}/server/ping`
+        );
+        if (response.ok) {
+          console.log("✅ Connection successful");
+        } else {
+          console.log(`❌ Connection failed with status: ${response.status}`);
+        }
+      } catch (error: any) {
+        console.log(`❌ Connection failed: ${error.message}`);
+        console.log(
+          "Please check that the Directus server is running at the specified URL."
+        );
+        return;
+      }
+
+      // Then test with auth
+      try {
+        // Use readMe imported at the top of the file
+        await client.request(readMe());
+        console.log(
+          "✅ Authentication works - successfully retrieved current user"
+        );
+      } catch (error: any) {
+        console.log("\n❌ Authentication test failed");
+        console.log(`Error: ${error.message || "Unknown error"}`);
+
+        if (error.response?.data) {
+          console.log(
+            "\nResponse data:",
+            JSON.stringify(error.response.data, null, 2)
+          );
+        }
+
+        console.log("\nTips:");
+        console.log("1. Check that your token is valid and has not expired");
+        console.log("2. Verify the API URL is correct and accessible");
+        console.log("3. Make sure the token has sufficient permissions");
+        console.log(
+          "\nIf using a .env file, check that it's being loaded correctly:"
+        );
+        console.log("- File should be in the current working directory");
+        console.log("- File should be named .env");
+        console.log(
+          "- Variables should be in format: DIRECTUS_CT_TOKEN=your_token"
+        );
+      }
+    } catch (error) {
+      console.error("Debug check failed:", error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("debug-env")
+  .description(
+    "Run detailed environment checks to diagnose configuration issues"
+  )
+  .action(async () => {
+    try {
+      await checkEnvironment();
+    } catch (error) {
+      console.error("Environment check failed:", error);
       process.exit(1);
     }
   });

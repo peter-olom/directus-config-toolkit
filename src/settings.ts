@@ -1,7 +1,19 @@
 import { join } from "path";
 import { client, CONFIG_PATH, ensureConfigDirs } from "./helper";
-import { readRole, readSettings, updateSettings } from "@directus/sdk";
+import {
+  readRole,
+  readSettings,
+  updateSettings,
+  readRoles,
+} from "@directus/sdk";
 import { readFileSync, writeFileSync } from "fs";
+import { findPublicRole } from "./roles";
+
+interface Role {
+  id: string;
+  name?: string;
+  icon?: string;
+}
 
 export class SettingsManager {
   private outputPath: string = join(CONFIG_PATH, "settings.json");
@@ -173,10 +185,56 @@ export class SettingsManager {
       // Handle special case for public_registration_role
       if (extendedSettings.public_registration_role) {
         console.log("Processing public_registration_role via direct API...");
-        const roleId = extendedSettings.public_registration_role;
+        let roleId = extendedSettings.public_registration_role;
 
         try {
-          const roleExists = await this.roleExists(roleId);
+          // First check direct ID match
+          let roleExists = await this.roleExists(roleId);
+
+          // If role doesn't exist by direct ID, check if it might be the Public role with a different ID
+          if (!roleExists) {
+            console.log(
+              `Role ${roleId} not found directly. Checking if this is a Public role...`
+            );
+
+            // Read the source and destination roles to look for Public role mapping
+            try {
+              // Get existing roles in destination
+              const existingRoles = await client.request(readRoles());
+
+              // Read the source roles from file
+              const rolePath = join(CONFIG_PATH, "roles.json");
+              const incomingRoles = JSON.parse(readFileSync(rolePath, "utf8"));
+
+              // Find the source role that was referenced
+              const sourceRole: Role | undefined = (
+                incomingRoles as Role[]
+              ).find((r: Role) => r.id === roleId);
+
+              if (sourceRole) {
+                // Check if this is a Public role
+                if (
+                  sourceRole.name?.toLowerCase().includes("public") ||
+                  sourceRole.name?.startsWith("$t:public") ||
+                  sourceRole.icon === "public"
+                ) {
+                  // Find equivalent Public role in destination
+                  const destPublicRole = findPublicRole(existingRoles);
+
+                  if (destPublicRole) {
+                    console.log(
+                      `Found matching Public role in destination: ${destPublicRole.name} (${destPublicRole.id})`
+                    );
+                    roleId = destPublicRole.id;
+                    roleExists = true;
+                  }
+                }
+              }
+            } catch (e) {
+              console.warn("Failed to perform advanced role mapping:", e);
+              // Continue with original roleId
+            }
+          }
 
           if (roleExists) {
             // Use direct API call instead of SDK for unsupported fields
@@ -187,7 +245,9 @@ export class SettingsManager {
                 public_registration_role: roleId,
               },
             } as any);
-            console.log("Successfully updated public_registration_role");
+            console.log(
+              `Successfully updated public_registration_role to ${roleId}`
+            );
           } else {
             console.warn(
               `Role ${roleId} not found. Public registration role will not be set.`

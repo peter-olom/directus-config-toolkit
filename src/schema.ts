@@ -17,22 +17,50 @@ export class SchemaManager {
   };
 
   importSchema = async () => {
-    await this.handleImporSchema();
-    console.log("Collections imported successfully.");
+    try {
+      await this.handleImporSchema();
+      console.log("Collections imported successfully.");
+    } catch (error: any) {
+      console.error(
+        `Schema import failed: ${error.message || JSON.stringify(error)}`
+      );
+      throw error;
+    }
   };
 
   private async handleImporSchema() {
-    const vcSchema = JSON.parse(readFileSync(this.schemaPath, "utf8"));
+    try {
+      const vcSchema = JSON.parse(readFileSync(this.schemaPath, "utf8"));
 
-    // check schema differences
-    const diffSchema = await client.request(schemaDiff(vcSchema));
+      console.log("Checking schema differences...");
+      // check schema differences
+      const diffSchema = await client.request(schemaDiff(vcSchema));
 
-    if (_.isEmpty(diffSchema)) {
-      console.log("No schema differences found.");
-      return;
+      if (_.isEmpty(diffSchema)) {
+        console.log("No schema differences found.");
+        return;
+      }
+
+      console.log("Applying schema differences...");
+      // apply schema differences
+      await client.request(schemaApply(diffSchema));
+    } catch (error: any) {
+      // Handle connection errors with detailed messages
+      if (
+        error.message?.includes("ECONNREFUSED") ||
+        error.code === "ECONNREFUSED"
+      ) {
+        console.error(
+          `Connection refused - check that the Directus server is running at ${
+            process.env.DIRECTUS_CT_URL || "http://localhost:8055"
+          }`
+        );
+      } else if (error.response?.status === 403) {
+        console.error(
+          "Permission denied - check that your token has proper permissions"
+        );
+      }
+      throw error;
     }
-
-    // apply schema differences
-    await client.request(schemaApply(diffSchema));
   }
 }

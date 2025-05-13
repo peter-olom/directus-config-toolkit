@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { client, CONFIG_PATH, ensureConfigDirs } from "./helper";
+import { findPublicRole, findPublicPolicy } from "./roles";
 import {
   readRoles,
   readSettings,
@@ -10,6 +11,7 @@ import {
   readFlows,
   readFiles,
   readFolders,
+  readPolicies,
 } from "@directus/sdk";
 import _ from "lodash";
 import { FlowsManager } from "./flows";
@@ -40,8 +42,8 @@ export class SnapshotManager {
     ensureConfigDirs();
 
     // Create snapshot directory if it doesn't exist
-    if (!require("fs").existsSync(this.snapshotPath)) {
-      require("fs").mkdirSync(this.snapshotPath, { recursive: true });
+    if (!existsSync(this.snapshotPath)) {
+      mkdirSync(this.snapshotPath, { recursive: true });
     }
 
     try {
@@ -130,7 +132,7 @@ export class SnapshotManager {
     ];
 
     const missingFiles = files.filter(
-      (file) => !require("fs").existsSync(join(this.snapshotPath, file))
+      (file) => !existsSync(join(this.snapshotPath, file))
     );
 
     if (missingFiles.length > 0) {
@@ -310,6 +312,204 @@ export class SnapshotManager {
       }
     } catch (error) {
       console.error("Error checking for duplicate IDs:", error);
+    }
+  };
+
+  /**
+   * Check role identities between two environments by name and properties
+   * This helps identify roles that should be mapped between environments
+   */
+  checkRoleIdentities = async () => {
+    console.log(
+      "Checking role identities between config and current instance..."
+    );
+
+    try {
+      // findPublicRole is now imported at the top of the file
+
+      // Load roles from config files
+      const configRoles = JSON.parse(
+        readFileSync(join(CONFIG_PATH, "roles.json"), "utf8")
+      );
+
+      // Get current roles from the Directus instance
+      const instanceRoles = await client.request(readRoles());
+
+      console.log(
+        `Found ${configRoles.length} roles in config and ${instanceRoles.length} roles in instance`
+      );
+
+      // Create mapping tables by name and ID
+      const nameMapping = new Map<
+        string,
+        { configRole: any; instanceRole: any }
+      >();
+      const rolesToMap = [];
+
+      // Track special roles
+      const configPublicRole = findPublicRole(configRoles);
+      const instancePublicRole = findPublicRole(instanceRoles);
+
+      if (configPublicRole && instancePublicRole) {
+        console.log(
+          `Public role in config: "${configPublicRole.name}" (${configPublicRole.id})`
+        );
+        console.log(
+          `Public role in instance: "${instancePublicRole.name}" (${instancePublicRole.id})`
+        );
+
+        if (configPublicRole.id !== instancePublicRole.id) {
+          console.log(
+            `⚠️  PUBLIC ROLE ID MISMATCH - Will require mapping during import`
+          );
+          rolesToMap.push({
+            configId: configPublicRole.id,
+            instanceId: instancePublicRole.id,
+            name: configPublicRole.name,
+            reason: "Public role",
+          });
+        }
+      }
+
+      // Check for roles with the same name but different IDs
+      for (const configRole of configRoles) {
+        // Skip admin roles (check by name as a proxy since admin_access is in policies table)
+        if (configRole.name?.toLowerCase().includes("admin")) continue;
+
+        const matchByName = instanceRoles.find(
+          (r) => r.name === configRole.name && r.id !== configRole.id
+        );
+
+        if (matchByName) {
+          console.log(`Role name "${configRole.name}" has different IDs:`);
+          console.log(`  - Config: ${configRole.id}`);
+          console.log(`  - Instance: ${matchByName.id}`);
+
+          rolesToMap.push({
+            configId: configRole.id,
+            instanceId: matchByName.id,
+            name: configRole.name,
+            reason: "Same name, different ID",
+          });
+        }
+      }
+
+      // Write mapping suggestions to a file if we found any
+      if (rolesToMap.length > 0) {
+        console.log(
+          `\nFound ${rolesToMap.length} roles that need mapping during import`
+        );
+        writeFileSync(
+          join(this.snapshotPath, "role_mapping.json"),
+          JSON.stringify(rolesToMap, null, 2)
+        );
+        console.log(
+          `Role mapping suggestions saved to ${join(
+            this.snapshotPath,
+            "role_mapping.json"
+          )}`
+        );
+
+        // Generate sample code for applying these mappings
+        const sampleCode = `
+// Sample code to handle role mapping during import:
+const roleMapping = new Map([
+${rolesToMap
+  .map(
+    (r) => `  ["${r.configId}", "${r.instanceId}"], // ${r.name} - ${r.reason}`
+  )
+  .join("\n")}
+]);
+
+// Then when processing permissions or settings:
+if (item.role && roleMapping.has(item.role)) {
+  item.role = roleMapping.get(item.role);
+}`;
+
+        writeFileSync(
+          join(this.snapshotPath, "role_mapping_sample.js"),
+          sampleCode
+        );
+        console.log(
+          `Sample code for applying mappings saved to ${join(
+            this.snapshotPath,
+            "role_mapping_sample.js"
+          )}`
+        );
+      } else {
+        console.log(
+          "✅ All roles have consistent identifiers between environments"
+        );
+      }
+    } catch (error: any) {
+      console.error("Error checking role identities:", error.message);
+    }
+  };
+
+  /**
+   * Check for Public policy identities between two environments
+   * This helps identify the public policy that should be consistent between environments
+   */
+  checkPublicPolicyIdentities = async () => {
+    console.log(
+      "Checking public policy identities between config and current instance..."
+    );
+
+    try {
+      // Load policies from config files
+      const configPolicies = JSON.parse(
+        readFileSync(join(CONFIG_PATH, "policies.json"), "utf8")
+      );
+
+      // Get current policies from the Directus instance
+      const instancePolicies = await client.request(readPolicies());
+
+      console.log(
+        `Found ${configPolicies.length} policies in config and ${instancePolicies.length} policies in instance`
+      );
+
+      // Find public policies in both environments
+      const configPublicPolicy = findPublicPolicy(configPolicies);
+      const instancePublicPolicy = findPublicPolicy(instancePolicies);
+
+      if (configPublicPolicy && instancePublicPolicy) {
+        console.log("Public policy found in both environments:");
+        console.log(
+          `  - Config: ${configPublicPolicy.name} (${configPublicPolicy.id})`
+        );
+        console.log(
+          `  - Instance: ${instancePublicPolicy.name} (${instancePublicPolicy.id})`
+        );
+
+        if (configPublicPolicy.id !== instancePublicPolicy.id) {
+          console.log(
+            "\n⚠️ Public policy has different IDs in the two environments!"
+          );
+          console.log(
+            "This may cause issues with permissions. Consider mapping these IDs."
+          );
+        } else {
+          console.log(
+            "✅ Public policy has consistent ID across environments."
+          );
+        }
+      } else if (configPublicPolicy) {
+        console.log("⚠️ Public policy found only in config:");
+        console.log(
+          `  - Config: ${configPublicPolicy.name} (${configPublicPolicy.id})`
+        );
+        console.log("No matching public policy found in the current instance.");
+      } else if (instancePublicPolicy) {
+        console.log("⚠️ Public policy found only in current instance:");
+        console.log(
+          `  - Instance: ${instancePublicPolicy.name} (${instancePublicPolicy.id})`
+        );
+        console.log("No matching public policy found in the config files.");
+      } else {
+        console.log("ℹ️ No public policy found in either environment.");
+      }
+    } catch (error) {
+      console.error("Error checking public policy identities:", error);
     }
   };
 }
