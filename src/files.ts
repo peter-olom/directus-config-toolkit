@@ -70,7 +70,23 @@ export class FilesManager {
     );
     const destinationFolders = await this.getRemoteFolders();
 
-    for (const folder of sourceFolders) {
+    // Sort folders by hierarchy level (root first, then children)
+    const sortedFolders = _.sortBy(sourceFolders, (folder) => {
+      let level = 0;
+      let current = folder;
+      while (current.parent) {
+        const parent = sourceFolders.find((f) => f.id === current.parent);
+        if (parent) {
+          level++;
+          current = parent;
+        } else {
+          break;
+        }
+      }
+      return level;
+    });
+
+    for (const folder of sortedFolders) {
       const existingFolder = destinationFolders.find((f) => f.id === folder.id);
       if (existingFolder) {
         if (!_.isEqual(existingFolder, folder)) {
@@ -150,6 +166,39 @@ export class FilesManager {
     return formData;
   };
 
+  private async getParentFolders(folderIds: string[]) {
+    const parentFolders: Record<string, any>[] = [];
+    let currentFolders = await client.request(
+      readFolders({
+        filter: {
+          id: { _in: folderIds },
+        },
+      })
+    );
+
+    while (currentFolders.length > 0) {
+      const parentIds = currentFolders
+        .map((f) => f.parent)
+        .filter((id) => id) as string[];
+
+      if (parentIds.length > 0) {
+        const parents = await client.request(
+          readFolders({
+            filter: {
+              id: { _in: parentIds },
+            },
+          })
+        );
+        parentFolders.push(...parents);
+        currentFolders = parents;
+      } else {
+        break;
+      }
+    }
+
+    return _.uniqBy(parentFolders, "id");
+  }
+
   private async getRemoteFolders() {
     let markedFolders: Record<string, any>[] = [];
     let files: Record<string, any>[] = [];
@@ -168,45 +217,49 @@ export class FilesManager {
       );
     }
 
+    // Get all parent folders of marked folders
+    if (markedFolders.length > 0) {
+      const parentFolders = await this.getParentFolders(
+        markedFolders.map((f) => f.id)
+      );
+      markedFolders = _.uniqBy([...markedFolders, ...parentFolders], "id");
+    }
+
     try {
-      // Get folders containing files marked for backup
-      files = await client.request(
+      // Get files marked for backup that have folders
+      const files = await client.request(
         readFiles({
           filter: {
             _and: [this.getBackupFilter(), { folder: { _nnull: true } }],
           },
         })
       );
-    } catch (error) {
-      files = await this.handleFieldPermissionError(
-        error,
-        "Error reading files with folder filter"
-      );
-    }
 
-    const folderIds = files
-      .map((file) => file.folder)
-      .filter((id): id is string => !!id);
+      // Get unique folder IDs from marked files
+      const folderIds = files
+        .map((file) => file.folder)
+        .filter((id): id is string => !!id);
 
-    console.log("Related folderIds", folderIds);
-
-    let relatedFolders: Record<string, any>[] = [];
-    if (folderIds.length > 0) {
-      try {
-        relatedFolders = await client.request(
+      let fileFolders: Record<string, any>[] = [];
+      if (folderIds.length > 0) {
+        fileFolders = await client.request(
           readFolders({
             filter: {
               id: { _in: folderIds },
             },
           })
         );
-      } catch {
-        console.warn(`Warning: Error reading related folders`);
       }
-    }
 
-    // Combine and deduplicate folders
-    return _.uniqBy([...markedFolders, ...relatedFolders], "id");
+      // Combine and deduplicate:
+      // 1. Folders explicitly marked for backup
+      // 2. Their parent folders
+      // 3. Folders containing marked files
+      return _.uniqBy([...markedFolders, ...fileFolders], "id");
+    } catch (error) {
+      console.warn("Error getting folders for marked files:", error);
+      return _.uniqBy([...markedFolders], "id");
+    }
   }
 
   exportFiles = async () => {
