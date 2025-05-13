@@ -8,6 +8,8 @@
 - **Import Configurations**: Apply version-controlled configurations to new or existing Directus instances.
 - **Environment Variable Support**: Configure the tool using environment variables for flexibility and security.
 - **CI/CD Integration**: Seamlessly integrate with CI/CD pipelines to automate configuration management.
+- **Validation & Troubleshooting**: Identify potential conflicts and issues before importing configurations.
+- **Snapshots**: Create and compare snapshots to track changes between environments.
 
 ## Installation
 
@@ -45,7 +47,11 @@ The toolkit supports the following commands:
 - `import <type>`: Import the specified configuration type.
 - `config`: Display the current API token and URL from the environment variables.
 - `export-all`: Exports all the configuration managed by this toolkit.
-- `import-all`: Imports all the configuration managed by this toolkit. It does this in a sequence that reduces chance of errors. This should be the goto choice when restoring on a new environment or in CI.
+- `import-all`: Imports all the configuration managed by this toolkit. It does this in a sequence that reduces chance of errors.
+  - Use `--continue-on-error` flag to continue the import sequence even if one type fails.
+- `snapshot create`: Create a snapshot of the current Directus instance state.
+- `snapshot compare`: Compare the current snapshot with configuration files to identify differences.
+- `validate`: Check configuration files for potential import issues like duplicate IDs.
 
 Replace `<type>` with one of the following configuration types:
 
@@ -74,6 +80,63 @@ Display current configuration:
 ```bash
 directus-ct config
 ```
+
+## Troubleshooting
+
+If you encounter issues during the import process, try the following steps:
+
+### Duplicate ID Errors
+
+If you see errors like:
+
+```
+Value for field "id" in collection "directus_folders" has to be unique.
+```
+
+Run the validation command to identify duplicate IDs:
+
+```bash
+directus-ct validate
+```
+
+Fix any duplicate IDs in your configuration files before importing again.
+
+### Foreign Key Constraint Issues
+
+If you see errors related to foreign key constraints like:
+
+```
+The UPDATE statement conflicted with the FOREIGN KEY constraint "directus_settings_public_registration_role_foreign"
+```
+
+This usually means you're trying to import settings that reference roles or other entities that don't exist yet. Try:
+
+1. Make sure to import roles before settings: The tool now imports in a sequence that should prevent this issue.
+2. Check that all referenced roles actually exist in your roles.json file.
+3. Use the snapshot and compare features to identify discrepancies:
+
+```bash
+directus-ct snapshot create
+directus-ct snapshot compare
+```
+
+### Order of Import
+
+The tool imports configurations in the following sequence to minimize dependency issues:
+
+1. Schema
+2. Roles (and related permissions/policies)
+3. Files (and folders)
+4. Settings
+5. Flows
+
+### Advanced Troubleshooting
+
+For more detailed debugging:
+
+1. Enable verbose logging by setting `DEBUG=1` in your environment variables
+2. Use the snapshot comparison feature to identify differences between environments
+3. Check the snapshot diff files in the `config/snapshot` directory for detailed information
 
 ## Contributing
 

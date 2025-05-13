@@ -70,6 +70,12 @@ export class FilesManager {
     );
     const destinationFolders = await this.getRemoteFolders();
 
+    // Create mapping of existing folder IDs for quick lookup
+    const existingFolderMap = new Map();
+    for (const folder of destinationFolders) {
+      existingFolderMap.set(folder.id, folder);
+    }
+
     // Sort folders by hierarchy level (root first, then children)
     const sortedFolders = _.sortBy(sourceFolders, (folder) => {
       let level = 0;
@@ -86,17 +92,40 @@ export class FilesManager {
       return level;
     });
 
+    // Process each folder with enhanced error handling
     for (const folder of sortedFolders) {
-      const existingFolder = destinationFolders.find((f) => f.id === folder.id);
-      if (existingFolder) {
-        if (!_.isEqual(existingFolder, folder)) {
-          await client.request(updateFolder(folder.id, folder));
+      try {
+        const existingFolder = existingFolderMap.get(folder.id);
+        if (existingFolder) {
+          if (!_.isEqual(existingFolder, folder)) {
+            await client.request(updateFolder(folder.id, folder));
+            console.log(`Updated folder: ${folder.name} (${folder.id})`);
+          }
+        } else {
+          await client.request(createFolder(folder));
+          console.log(`Created folder: ${folder.name} (${folder.id})`);
         }
-      } else {
-        await client.request(createFolder(folder));
+      } catch (error: any) {
+        // Handle duplication errors specifically
+        if (error?.errors?.[0]?.extensions?.code === "RECORD_NOT_UNIQUE") {
+          console.warn(
+            `Folder with ID ${folder.id} already exists but wasn't detected. Attempting to update instead.`
+          );
+          try {
+            await client.request(updateFolder(folder.id, folder));
+            console.log(
+              `Updated previously undetected folder: ${folder.name} (${folder.id})`
+            );
+          } catch (updateError) {
+            console.error(`Failed to update folder ${folder.id}:`, updateError);
+          }
+        } else {
+          console.error(`Error processing folder ${folder.id}:`, error);
+        }
       }
     }
-    // delete folders that are not in the source
+
+    // Delete folders that are not in the source
     const diff = _.differenceBy(destinationFolders, sourceFolders, "id");
     if (diff.length) {
       await client.request(deleteFolders(diff.map((f) => f.id)));
@@ -111,32 +140,78 @@ export class FilesManager {
       readFiles({ filter: this.getBackupFilter() })
     );
 
-    const filePromises = sourceFiles.map(async (file) => {
-      const existingFile = destinationFiles
-        .map(this.untrackIgnoredFields)
-        .find((f) => f.id === file.id);
-      const formData = this.createFormData(file);
+    // Create a map of existing files by ID for faster lookups
+    const existingFileMap = new Map();
+    destinationFiles
+      .map(this.untrackIgnoredFields)
+      .forEach((file) => existingFileMap.set(file.id, file));
 
-      if (existingFile) {
-        if (!_.isEqual(existingFile, file)) {
-          return restFileUpload(formData as any, file.id);
+    console.log(`Importing ${sourceFiles.length} files...`);
+
+    // Process files sequentially to avoid overwhelming the server
+    let successCount = 0;
+    let skipCount = 0;
+    let errorCount = 0;
+
+    for (const file of sourceFiles) {
+      try {
+        const existingFile = existingFileMap.get(file.id);
+        const formData = this.createFormData(file);
+
+        if (existingFile) {
+          if (!_.isEqual(existingFile, file)) {
+            console.log(
+              `Updating file: ${file.filename_download} (${file.id})`
+            );
+            await restFileUpload(formData as any, file.id);
+            successCount++;
+          } else {
+            console.log(
+              `Skipping unchanged file: ${file.filename_download} (${file.id})`
+            );
+            skipCount++;
+          }
+        } else {
+          // use axios to upload the file
+          console.log(
+            `Creating new file: ${file.filename_download} (${file.id})`
+          );
+          await restFileUpload(formData as any);
+          successCount++;
         }
-      } else {
-        // use axios to upload the file
-        return restFileUpload(formData as any);
+      } catch (error: any) {
+        console.error(
+          `Error processing file ${file.id} (${file.filename_download}):`,
+          error.message || JSON.stringify(error)
+        );
+        errorCount++;
       }
-    });
-
-    if (filePromises.length) {
-      await Promise.all(filePromises);
-    } else {
-      console.log("All files are in sync. No files to import.");
     }
 
-    // Clean up orphaned files
+    console.log(
+      `File import summary: ${successCount} updated/created, ${skipCount} unchanged, ${errorCount} errors`
+    );
+
+    // Clean up orphaned files - but ask for confirmation if there are many
     const diffFiles = _.differenceBy(destinationFiles, sourceFiles, "id");
     if (diffFiles.length) {
-      await client.request(deleteFiles(diffFiles.map((f) => f.id)));
+      if (diffFiles.length > 5) {
+        console.log(
+          `Will remove ${diffFiles.length} files that are not in the source:`
+        );
+        diffFiles.forEach((file) =>
+          console.log(`- ${file.filename_download} (${file.id})`)
+        );
+      }
+
+      try {
+        await client.request(deleteFiles(diffFiles.map((f) => f.id)));
+        console.log(
+          `Removed ${diffFiles.length} files that were not in the source`
+        );
+      } catch (error) {
+        console.error(`Failed to remove orphaned files:`, error);
+      }
     }
   };
 
@@ -201,31 +276,42 @@ export class FilesManager {
 
   private async getRemoteFolders() {
     let markedFolders: Record<string, any>[] = [];
-    let files: Record<string, any>[] = [];
+    let fileFolders: Record<string, any>[] = [];
 
+    // Step 1: Get folders explicitly marked for backup
     try {
-      // Get folders explicitly marked for backup
+      console.log("Fetching folders marked for backup...");
       markedFolders = await client.request(
         readFolders({
           filter: this.getBackupFilter(),
         })
       );
+      console.log(`Found ${markedFolders.length} marked folders`);
     } catch (error) {
+      console.warn("Error reading folders with backup filter:", error);
       markedFolders = await this.handleFieldPermissionError(
         error,
         "Error reading folders with backup filter"
       );
     }
 
-    // Get all parent folders of marked folders
+    // Step 2: Get all parent folders of marked folders
     if (markedFolders.length > 0) {
-      const parentFolders = await this.getParentFolders(
-        markedFolders.map((f) => f.id)
-      );
-      markedFolders = _.uniqBy([...markedFolders, ...parentFolders], "id");
+      try {
+        console.log("Fetching parent folders...");
+        const parentFolders = await this.getParentFolders(
+          markedFolders.map((f) => f.id)
+        );
+        console.log(`Found ${parentFolders.length} parent folders`);
+        markedFolders = _.uniqBy([...markedFolders, ...parentFolders], "id");
+      } catch (error) {
+        console.warn("Error getting parent folders:", error);
+      }
     }
 
+    // Step 3: Get folders from files that are marked for backup
     try {
+      console.log("Fetching folders from backed-up files...");
       // Get files marked for backup that have folders
       const files = await client.request(
         readFiles({
@@ -234,28 +320,45 @@ export class FilesManager {
           },
         })
       );
+      console.log(`Found ${files.length} files with folders`);
 
       // Get unique folder IDs from marked files
-      const folderIds = files
-        .map((file) => file.folder)
-        .filter((id): id is string => !!id);
+      const folderIds = _.uniq(
+        files.map((file) => file.folder).filter((id): id is string => !!id)
+      );
 
-      let fileFolders: Record<string, any>[] = [];
       if (folderIds.length > 0) {
-        fileFolders = await client.request(
-          readFolders({
-            filter: {
-              id: { _in: folderIds },
-            },
-          })
-        );
+        console.log(`Found ${folderIds.length} unique folder IDs from files`);
+
+        // Process folder IDs in batches to avoid URL length limits
+        const batchSize = 20;
+        for (let i = 0; i < folderIds.length; i += batchSize) {
+          const batch = folderIds.slice(i, i + batchSize);
+          try {
+            const batchFolders = await client.request(
+              readFolders({
+                filter: {
+                  id: { _in: batch },
+                },
+              })
+            );
+            fileFolders = [...fileFolders, ...batchFolders];
+          } catch (error) {
+            console.warn(
+              `Error getting folders batch ${i / batchSize + 1}:`,
+              error
+            );
+          }
+        }
       }
 
       // Combine and deduplicate:
       // 1. Folders explicitly marked for backup
       // 2. Their parent folders
       // 3. Folders containing marked files
-      return _.uniqBy([...markedFolders, ...fileFolders], "id");
+      const allFolders = _.uniqBy([...markedFolders, ...fileFolders], "id");
+      console.log(`Total unique folders: ${allFolders.length}`);
+      return allFolders;
     } catch (error) {
       console.warn("Error getting folders for marked files:", error);
       return _.uniqBy([...markedFolders], "id");
