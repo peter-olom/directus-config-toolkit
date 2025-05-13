@@ -270,14 +270,25 @@ export class FilesManager {
     const folders = await this.getRemoteFolders();
     writeFileSync(this.folderPath, JSON.stringify(folders, null, 2));
 
-    // backup files next
+    // backup files next - only those with should backup set to true
     await this.getBackupField("directus_files");
-    // backup files next
     let files: Record<string, any>[] = [];
     try {
       files = await client.request(
-        readFiles({ filter: this.getBackupFilter() })
+        readFiles({
+          filter: this.getBackupFilter(),
+          fields: ["*"], // Ensure all fields are returned for filtering
+        })
       );
+
+      // Double-check backup flag in case filter didn't work
+      if (this.backupField && files.length > 0) {
+        files = files.filter(
+          (file) =>
+            file.hasOwnProperty(this.backupField!) &&
+            file[this.backupField!] === true
+        );
+      }
     } catch (error) {
       files = await this.handleFieldPermissionError(
         error,
