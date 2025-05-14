@@ -3,6 +3,7 @@
 import "dotenv/config";
 import { Command } from "commander";
 import { FlowsManager } from "./flows";
+import pkg from "../package.json";
 import { RolesManager } from "./roles";
 import { SettingsManager } from "./settings";
 import { FilesManager } from "./files";
@@ -46,7 +47,7 @@ const program = new Command();
 program
   .name("directus-ct")
   .description("CLI tool for managing Directus configurations")
-  .version("1.0.0");
+  .version(pkg.version);
 
 function validateType(value: string): ConfigType {
   if (supportedTypes.includes(value as ConfigType)) {
