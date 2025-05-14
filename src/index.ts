@@ -8,6 +8,7 @@ import { SettingsManager } from "./settings";
 import { FilesManager } from "./files";
 import { SchemaManager } from "./schema";
 import { SnapshotManager } from "./snapshot";
+import { ApiServer } from "./api";
 import { printConfig, client } from "./helper";
 import { readMe } from "@directus/sdk";
 import checkEnvironment from "./utils/checkEnv";
@@ -358,6 +359,20 @@ program
       await checkEnvironment();
     } catch (error) {
       console.error("Environment check failed:", error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("dashboard")
+  .description("Start the dashboard UI server")
+  .action(async () => {
+    try {
+      console.log("Starting dashboard API server...");
+      const apiServer = new ApiServer();
+      apiServer.start();
+    } catch (error) {
+      console.error("Failed to start dashboard:", error);
       process.exit(1);
     }
   });

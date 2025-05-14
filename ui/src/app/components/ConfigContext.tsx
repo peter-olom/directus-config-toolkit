@@ -1,12 +1,12 @@
 "use client";
 
-import { createContext, ReactNode, useContext, useState } from "react";
 import {
-  mockConfigStatuses,
-  mockDiffResults,
-  mockSyncJobs,
-  simulateApiDelay,
-} from "../mockData";
+  createContext,
+  ReactNode,
+  useContext,
+  useState,
+  useEffect,
+} from "react";
 import {
   ConfigStatus,
   ConfigType,
@@ -14,16 +14,18 @@ import {
   SyncJob,
   ActionResult,
 } from "../types";
+import * as api from "../services/api";
 
 interface ConfigContextType {
   configStatuses: ConfigStatus[];
   diffResults: Record<ConfigType, DiffResult>;
   syncJobs: SyncJob[];
   loading: boolean;
+  error: string | null;
   syncConfig: (
     type: ConfigType,
     direction: "import" | "export"
-  ) => Promise<ActionResult>;
+  ) => Promise<void>;
   getDiff: (type: ConfigType) => Promise<DiffResult>;
   refreshStatus: () => Promise<void>;
 }
@@ -31,67 +33,87 @@ interface ConfigContextType {
 const ConfigContext = createContext<ConfigContextType | undefined>(undefined);
 
 export const ConfigProvider = ({ children }: { children: ReactNode }) => {
-  const [configStatuses, setConfigStatuses] =
-    useState<ConfigStatus[]>(mockConfigStatuses);
-  const [diffResults, setDiffResults] =
-    useState<Record<ConfigType, DiffResult>>(mockDiffResults);
-  const [syncJobs, setSyncJobs] = useState<SyncJob[]>(mockSyncJobs);
+  const [configStatuses, setConfigStatuses] = useState<ConfigStatus[]>([]);
+  const [diffResults, setDiffResults] = useState<
+    Record<ConfigType, DiffResult>
+  >({} as Record<ConfigType, DiffResult>);
+  const [syncJobs, setSyncJobs] = useState<SyncJob[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Initial data fetch
+  useEffect(() => {
+    // Set initial loading state
+    setLoading(true);
+
+    // Load data in parallel
+    const loadInitialData = async () => {
+      try {
+        // Using Promise.all to load data in parallel
+        await Promise.all([refreshStatus(), loadSyncJobs()]);
+      } catch (error) {
+        console.error("Failed to load initial data:", error);
+        setError(
+          "Failed to load initial data. Please check your connection and try again."
+        );
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadInitialData();
+  }, []);
+
+  // Load sync jobs history
+  const loadSyncJobs = async () => {
+    try {
+      const jobs = await api.getSyncJobs();
+      setSyncJobs(jobs);
+    } catch (error: any) {
+      setError(`Failed to load sync jobs: ${error.message}`);
+      console.error("Failed to load sync jobs:", error);
+    }
+  };
 
   const syncConfig = async (
     type: ConfigType,
     direction: "import" | "export"
-  ): Promise<ActionResult> => {
+  ) => {
     setLoading(true);
     try {
-      // Mock API call
-      await simulateApiDelay(1500);
+      await api.syncConfig(type, direction);
 
-      // Create a new job
-      const newJob: SyncJob = {
-        id: `job-${Date.now()}`,
-        type,
-        direction,
-        status: "completed",
-        createdAt: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
-      };
-
-      setSyncJobs([newJob, ...syncJobs]);
-
-      // Update the status
-      const updatedStatuses = configStatuses.map((status) =>
-        status.type === type
-          ? {
-              ...status,
-              lastSync: new Date().toISOString(),
-              status: "synced" as const,
-            }
-          : status
-      );
-
-      setConfigStatuses(updatedStatuses);
-
-      return {
-        success: true,
-        message: `Successfully ${direction}ed ${type} configuration`,
-      };
-    } catch (error) {
-      return {
-        success: false,
-        message: `Failed to ${direction} ${type} configuration`,
-      };
+      // Refresh the data after successful sync
+      await refreshStatus();
+      await loadSyncJobs();
+    } catch (error: any) {
+      console.error(`Failed to ${direction} ${type}:`, error);
     } finally {
       setLoading(false);
     }
   };
-
   const getDiff = async (type: ConfigType): Promise<DiffResult> => {
     setLoading(true);
     try {
-      // Mock API call
-      await simulateApiDelay(1000);
-      return diffResults[type];
+      // Get diffs from API
+      const result = await api.getDifferences(type);
+
+      // Store the result in our local state
+      setDiffResults((prev) => ({
+        ...prev,
+        [type]: result,
+      }));
+
+      return result;
+    } catch (error: any) {
+      console.error(`Failed to get diff for ${type}:`, error);
+      // Create an empty diff result if we don't have one cached
+      const emptyResult: DiffResult = {
+        type,
+        differences: [],
+        timestamp: new Date().toISOString(),
+      };
+      return diffResults[type] || emptyResult;
     } finally {
       setLoading(false);
     }
@@ -99,17 +121,11 @@ export const ConfigProvider = ({ children }: { children: ReactNode }) => {
 
   const refreshStatus = async (): Promise<void> => {
     setLoading(true);
+    setError(null);
     try {
-      // Mock API call
-      await simulateApiDelay(800);
-
-      // Create updated statuses with new timestamps
-      const updatedStatuses = configStatuses.map((status) => ({
-        ...status,
-        lastSync: new Date().toISOString(),
-      }));
-
-      setConfigStatuses(updatedStatuses);
+      // Get actual status from API
+      const statuses = await api.getConfigStatuses();
+      setConfigStatuses(statuses);
     } finally {
       setLoading(false);
     }
@@ -122,6 +138,7 @@ export const ConfigProvider = ({ children }: { children: ReactNode }) => {
         diffResults,
         syncJobs,
         loading,
+        error,
         syncConfig,
         getDiff,
         refreshStatus,

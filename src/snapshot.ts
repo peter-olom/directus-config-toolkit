@@ -19,6 +19,7 @@ import { RolesManager } from "./roles";
 import { SettingsManager } from "./settings";
 import { FilesManager } from "./files";
 import { SchemaManager } from "./schema";
+import { MetadataManager } from "./metadata";
 
 /**
  * The SnapshotManager provides utilities to compare the current state of a Directus instance
@@ -31,13 +32,17 @@ export class SnapshotManager {
   private settingsManager = new SettingsManager();
   private filesManager = new FilesManager();
   private schemaManager = new SchemaManager();
+  private metadataManager = new MetadataManager();
 
   constructor() {}
 
   /**
    * Creates a snapshot of the current Directus instance state to compare with config files
    */
-  createSnapshot = async () => {
+  public async createSnapshot(): Promise<{
+    success: boolean;
+    message: string;
+  }> {
     console.log("Creating snapshot of current Directus instance state...");
     ensureConfigDirs();
 
@@ -53,12 +58,17 @@ export class SnapshotManager {
         join(this.snapshotPath, "roles.snapshot.json"),
         JSON.stringify(roles, null, 2)
       );
+      this.metadataManager.updateItemsCount("roles", roles.length);
 
       // Snapshot settings
       const settings = await client.request(readSettings());
       writeFileSync(
         join(this.snapshotPath, "settings.snapshot.json"),
         JSON.stringify(settings, null, 2)
+      );
+      this.metadataManager.updateItemsCount(
+        "settings",
+        Object.keys(settings).length
       );
 
       // Snapshot collections
@@ -75,6 +85,12 @@ export class SnapshotManager {
         JSON.stringify(fields, null, 2)
       );
 
+      // Update schema items count (collections + fields)
+      this.metadataManager.updateItemsCount(
+        "schema",
+        collections.length + fields.length
+      );
+
       // Snapshot flows and operations
       const flows = await client.request(readFlows());
       writeFileSync(
@@ -87,12 +103,18 @@ export class SnapshotManager {
         join(this.snapshotPath, "operations.snapshot.json"),
         JSON.stringify(operations, null, 2)
       );
+      this.metadataManager.updateItemsCount(
+        "flows",
+        flows.length + operations.length
+      );
 
       // Snapshot files
+      await this.filesManager.getBackupField("directus_files");
+      const filesFilter = this.filesManager.getBackupFilter();
       const files = await client.request(
         readFiles({
-          filter: { id: { _nnull: true } },
-          limit: 1000,
+          filter: filesFilter,
+          fields: ["*"],
         })
       );
       writeFileSync(
@@ -101,22 +123,45 @@ export class SnapshotManager {
       );
 
       // Snapshot folders
-      const folders = await client.request(readFolders());
+      await this.filesManager.getBackupField("directus_folders");
+      const foldersFilter = this.filesManager.getBackupFilter();
+      const folders = await client.request(
+        readFolders({
+          filter: foldersFilter,
+          fields: ["*"],
+        })
+      );
       writeFileSync(
         join(this.snapshotPath, "folders.snapshot.json"),
         JSON.stringify(folders, null, 2)
       );
+      this.metadataManager.updateItemsCount(
+        "files",
+        files.length + folders.length
+      );
 
       console.log(`Snapshot created successfully at ${this.snapshotPath}`);
+      return {
+        success: true,
+        message: `Snapshot created successfully at ${this.snapshotPath}`,
+      };
     } catch (error) {
       console.error("Error creating snapshot:", error);
+      return {
+        success: false,
+        message: `Error creating snapshot: ${error}`,
+      };
     }
-  };
+  }
 
   /**
    * Compares snapshot with config files to identify differences
    */
-  compareWithConfig = async () => {
+  public async compareWithConfig(): Promise<{
+    success: boolean;
+    message: string;
+    diffResults: Record<string, any>;
+  }> {
     console.log("Comparing snapshot with configuration files...");
 
     // Check if snapshot exists
@@ -138,42 +183,123 @@ export class SnapshotManager {
     if (missingFiles.length > 0) {
       console.warn(`Missing snapshot files: ${missingFiles.join(", ")}`);
       console.warn("Run 'snapshot create' first to generate snapshot files.");
-      return;
+      return {
+        success: false,
+        message: "Missing snapshot files. Run 'snapshot create' first.",
+        diffResults: {},
+      };
     }
 
+    let hasConflicts = false;
+    const diffResults: Record<
+      string,
+      any // Changed to 'any' to accommodate the total count
+    > = {};
+    let totalInSnapshotOnly = 0;
+
     // Compare roles
-    this.compareFiles(
+    const rolesDiff = this.compareFiles(
       join(this.snapshotPath, "roles.snapshot.json"),
       join(CONFIG_PATH, "roles.json"),
       "roles",
       (a, b) => _.differenceWith(a, b, (x, y) => x.id === y.id)
     );
+    diffResults["roles"] = rolesDiff;
+    totalInSnapshotOnly += rolesDiff.inSnapshotOnly.length;
+    if (
+      rolesDiff.inSnapshotOnly.length > 0 ||
+      rolesDiff.inConfigOnly.length > 0
+    ) {
+      this.metadataManager.updateSyncStatus("roles", "conflict");
+      hasConflicts = true;
+    } else {
+      this.metadataManager.updateSyncStatus("roles", "synced");
+    }
 
     // Compare settings
-    this.compareFiles(
+    const settingsDiff = this.compareFiles(
       join(this.snapshotPath, "settings.snapshot.json"),
       join(CONFIG_PATH, "settings.json"),
       "settings"
     );
+    diffResults["settings"] = settingsDiff;
+    totalInSnapshotOnly += settingsDiff.inSnapshotOnly.length;
+    if (
+      settingsDiff.inSnapshotOnly.length > 0 ||
+      settingsDiff.inConfigOnly.length > 0
+    ) {
+      this.metadataManager.updateSyncStatus("settings", "conflict");
+      hasConflicts = true;
+    } else {
+      this.metadataManager.updateSyncStatus("settings", "synced");
+    }
 
     // Compare flows
-    this.compareFiles(
+    const flowsDiff = this.compareFiles(
       join(this.snapshotPath, "flows.snapshot.json"),
       join(CONFIG_PATH, "flows.json"),
       "flows",
       (a, b) => _.differenceWith(a, b, (x, y) => x.id === y.id)
     );
+    diffResults["flows"] = flowsDiff;
+    totalInSnapshotOnly += flowsDiff.inSnapshotOnly.length;
+    if (
+      flowsDiff.inSnapshotOnly.length > 0 ||
+      flowsDiff.inConfigOnly.length > 0
+    ) {
+      this.metadataManager.updateSyncStatus("flows", "conflict");
+      hasConflicts = true;
+    } else {
+      this.metadataManager.updateSyncStatus("flows", "synced");
+    }
 
-    // Compare folders
-    this.compareFiles(
+    // Compare folders (part of files)
+    const foldersDiff = this.compareFiles(
       join(this.snapshotPath, "folders.snapshot.json"),
       join(CONFIG_PATH, "folders.json"),
       "folders",
       (a, b) => _.differenceWith(a, b, (x, y) => x.id === y.id)
     );
+    diffResults["folders"] = foldersDiff;
+    totalInSnapshotOnly += foldersDiff.inSnapshotOnly.length;
 
+    // Compare files
+    const filesDiff = this.compareFiles(
+      join(this.snapshotPath, "files.snapshot.json"),
+      join(CONFIG_PATH, "files.json"),
+      "files",
+      (a, b) => _.differenceWith(a, b, (x, y) => x.id === y.id)
+    );
+    diffResults["files"] = filesDiff;
+    totalInSnapshotOnly += filesDiff.inSnapshotOnly.length;
+
+    // Update files status based on both folders and files differences
+    if (
+      foldersDiff.inSnapshotOnly.length > 0 ||
+      foldersDiff.inConfigOnly.length > 0 ||
+      filesDiff.inSnapshotOnly.length > 0 ||
+      filesDiff.inConfigOnly.length > 0
+    ) {
+      this.metadataManager.updateSyncStatus("files", "conflict");
+      hasConflicts = true;
+    } else {
+      this.metadataManager.updateSyncStatus("files", "synced");
+    }
+
+    diffResults["totalInSnapshotOnly"] = totalInSnapshotOnly;
+    console.log(
+      `\nTotal items in instance but not in config: ${totalInSnapshotOnly}`
+    );
     console.log("Comparison complete. Check output above for differences.");
-  };
+
+    return {
+      success: true,
+      message: hasConflicts
+        ? `Comparison complete. Conflicts detected. Total items in instance but not in config: ${totalInSnapshotOnly}.`
+        : `Comparison complete. No conflicts detected. Total items in instance but not in config: ${totalInSnapshotOnly}.`,
+      diffResults,
+    };
+  }
 
   /**
    * Helper to compare two JSON files
@@ -222,23 +348,29 @@ export class SnapshotManager {
 
       // Write differences to file for further inspection
       const differences = {
-        inInstanceOnly: inSnapshotOnly,
-        inConfigOnly: inConfigOnly,
+        inSnapshotOnly,
+        inConfigOnly,
       };
 
       writeFileSync(
         join(this.snapshotPath, `${name}.diff.json`),
         JSON.stringify(differences, null, 2)
       );
+
+      return differences;
     } catch (error) {
       console.error(`Error comparing ${name}:`, error);
+      return {
+        inSnapshotOnly: [],
+        inConfigOnly: [],
+      };
     }
   }
 
   /**
    * Find duplicate IDs in folders that could cause conflicts
    */
-  findDuplicateIds = async () => {
+  public async findDuplicateIds(): Promise<void> {
     console.log("Checking for duplicate IDs that might cause conflicts...");
 
     try {
@@ -313,13 +445,13 @@ export class SnapshotManager {
     } catch (error) {
       console.error("Error checking for duplicate IDs:", error);
     }
-  };
+  }
 
   /**
    * Check role identities between two environments by name and properties
    * This helps identify roles that should be mapped between environments
    */
-  checkRoleIdentities = async () => {
+  public async checkRoleIdentities(): Promise<void> {
     console.log(
       "Checking role identities between config and current instance..."
     );
@@ -444,13 +576,13 @@ if (item.role && roleMapping.has(item.role)) {
     } catch (error: any) {
       console.error("Error checking role identities:", error.message);
     }
-  };
+  }
 
   /**
    * Check for Public policy identities between two environments
    * This helps identify the public policy that should be consistent between environments
    */
-  checkPublicPolicyIdentities = async () => {
+  public async checkPublicPolicyIdentities(): Promise<void> {
     console.log(
       "Checking public policy identities between config and current instance..."
     );
@@ -511,5 +643,5 @@ if (item.role && roleMapping.has(item.role)) {
     } catch (error) {
       console.error("Error checking public policy identities:", error);
     }
-  };
+  }
 }

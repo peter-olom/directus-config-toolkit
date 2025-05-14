@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ConfigType } from "../types";
 import { useConfig } from "./ConfigContext";
+import EmptyState from "./EmptyState";
 
 interface StatusBadgeProps {
   status: "synced" | "pending" | "conflict";
@@ -29,7 +30,7 @@ const StatusBadge = ({ status }: StatusBadgeProps) => {
 
 interface ConfigItemProps {
   type: ConfigType;
-  filesCount: number;
+  itemsCount: number;
   lastSync: string;
   status: "synced" | "pending" | "conflict";
   onViewDiff: (type: ConfigType) => void;
@@ -37,7 +38,7 @@ interface ConfigItemProps {
 
 const ConfigItem = ({
   type,
-  filesCount,
+  itemsCount,
   lastSync,
   status,
   onViewDiff,
@@ -45,7 +46,9 @@ const ConfigItem = ({
   const { syncConfig, loading } = useConfig();
   const [isLoading, setIsLoading] = useState(false);
 
-  const formattedLastSync = new Date(lastSync).toLocaleString();
+  const formattedLastSync = !!lastSync
+    ? new Date(lastSync).toLocaleString()
+    : "N/A";
 
   const handleExport = async () => {
     setIsLoading(true);
@@ -69,7 +72,7 @@ const ConfigItem = ({
           <StatusBadge status={status} />
         </div>
         <div className="text-sm text-gray-500 dark:text-gray-400">
-          {filesCount} files • Last sync: {formattedLastSync}
+          {itemsCount} Items • Last sync: {formattedLastSync}
         </div>
       </div>
       <div className="flex gap-2">
@@ -160,16 +163,22 @@ export default function ConfigList({ onViewDiff }: ConfigListProps) {
         </button>
       </div>
       <div>
-        {configStatuses.map((config) => (
-          <ConfigItem
-            key={config.type}
-            type={config.type}
-            filesCount={config.filesCount}
-            lastSync={config.lastSync}
-            status={config.status}
-            onViewDiff={onViewDiff}
-          />
-        ))}
+        {configStatuses.length === 0 ? (
+          <EmptyState type="empty" message="No configurations available." />
+        ) : (
+          configStatuses
+            .filter((item) => !!item.type)
+            .map((config, index) => (
+              <ConfigItem
+                key={config.type + index}
+                type={config.type}
+                itemsCount={config.itemsCount}
+                lastSync={config.lastSync}
+                status={config.status}
+                onViewDiff={onViewDiff}
+              />
+            ))
+        )}
       </div>
     </div>
   );

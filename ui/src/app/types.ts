@@ -4,7 +4,7 @@ export type ConfigType = "flows" | "roles" | "settings" | "files" | "schema";
 
 export interface ConfigStatus {
   type: ConfigType;
-  filesCount: number;
+  itemsCount: number;
   lastSync: string;
   status: "synced" | "pending" | "conflict";
 }
@@ -35,5 +35,4 @@ export interface SyncJob {
 export interface ActionResult {
   success: boolean;
   message: string;
-  data?: any;
 }

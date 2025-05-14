@@ -9,5 +9,11 @@ until curl -s "${DIRECTUS_CT_URL}/server/ping"; do
   sleep 5
 done
 
-# Execute the directus-ct command passed as arguments
-exec directus-ct "$@"
+# Check if the command is to start the dashboard
+if [ "$1" = "dashboard" ]; then
+  echo "Starting dashboard API server..."
+  exec directus-ct dashboard
+else
+  # Execute the directus-ct command passed as arguments
+  exec directus-ct "$@"
+fi

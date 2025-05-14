@@ -10,6 +10,7 @@
 - **CI/CD Integration**: Seamlessly integrate with CI/CD pipelines to automate configuration management.
 - **Validation & Troubleshooting**: Identify potential conflicts and issues before importing configurations.
 - **Snapshots**: Create and compare snapshots to track changes between environments.
+- **Dashboard UI**: A web interface for managing and monitoring your Directus configurations.
 
 ## Installation
 
@@ -36,6 +37,7 @@ Set the following environment variables to configure the tool:
 - `DIRECTUS_CT_URL`: The URL of your Directus instance.
 - `DIRECTUS_CT_TOKEN`: The API token for authentication.
 - `DIRECTUS_CT_CONFIG_PATH`: The path to your configuration files (defaults to `./config`).
+- `DIRECTUS_CT_API_PORT`: The port for the dashboard API server (defaults to `3001`).
 
 You can set these variables in your shell or define them in a `.env` file in your project root.
 
@@ -53,6 +55,7 @@ The toolkit supports the following commands:
 - `snapshot compare`: Compare the current snapshot with configuration files to identify differences.
 - `snapshot roles`: Check role identities between environments to identify roles that need mapping.
 - `validate`: Check configuration files for potential import issues like duplicate IDs.
+- `dashboard`: Start the dashboard web interface for managing configurations.
 
 Replace `<type>` with one of the following configuration types:
 
@@ -81,6 +84,50 @@ Display current configuration:
 ```bash
 directus-ct config
 ```
+
+## Dashboard
+
+The dashboard provides a web interface for managing and monitoring your Directus configurations. It offers:
+
+- Visual representation of configuration status
+- Diff viewer to see changes before importing/exporting
+- Job history tracking
+- Easy import/export functionality
+
+### Starting the Dashboard
+
+To start the dashboard, run:
+
+```bash
+npx directus-ct dashboard
+```
+
+Or if installed globally:
+
+```bash
+directus-ct dashboard
+```
+
+The dashboard will be available at `http://localhost:3001` by default.
+
+### Docker
+
+You can also run the dashboard in Docker:
+
+```bash
+docker run -p 3001:3001 \
+  -e DIRECTUS_CT_URL=http://your-directus-url \
+  -e DIRECTUS_CT_TOKEN=your_token \
+  -v /path/to/config:/app/config \
+  devrue/directus-config-toolkit:latest dashboard
+```
+
+### Dashboard Environment Variables
+
+- `DIRECTUS_CT_API_PORT`: Port for the dashboard API server (default: 3001)
+- `DIRECTUS_CT_URL`: URL of your Directus instance
+- `DIRECTUS_CT_TOKEN`: API token for authentication
+- `DIRECTUS_CT_CONFIG_PATH`: Path to your configuration files
 
 ## Troubleshooting
 

@@ -12,6 +12,8 @@ import { writeFileSync, readFileSync } from "fs";
 import { join } from "path";
 import { client, CONFIG_PATH, ensureConfigDirs } from "./helper";
 import _ from "lodash";
+import { MetadataManager, ConfigType } from "./metadata";
+import { v4 as uuidv4 } from "uuid";
 
 interface DirectusOperation {
   id: string;
@@ -26,7 +28,11 @@ interface DirectusOperation {
 export class FlowsManager {
   private flowPath: string = join(CONFIG_PATH, "flows.json");
   private operationPath: string = join(CONFIG_PATH, "operations.json");
-  constructor() {}
+  private metadataManager: MetadataManager;
+
+  constructor() {
+    this.metadataManager = new MetadataManager();
+  }
 
   setUserNull(record: Record<string, any>) {
     if (record["user_created"]) {
@@ -44,32 +50,109 @@ export class FlowsManager {
 
   exportFlows = async () => {
     ensureConfigDirs();
-    // flows are tied to operations, so we need to fetch all operations
-    const operations = await client.request(readOperations());
-    writeFileSync(
-      this.operationPath,
-      JSON.stringify(operations.map(this.setUserNull), null, 2)
-    );
 
-    const flows = await client.request(readFlows());
-    writeFileSync(
-      this.flowPath,
-      // empty operations because it is many-to-many relationship; relationship will be created when operations are imported
-      JSON.stringify(
-        flows.map(this.setUserNull).map(this.emptyOperations),
-        null,
-        2
-      )
-    );
+    // Create a new sync job
+    const jobId = uuidv4();
+    const jobType: ConfigType = "flows";
+    const now = new Date().toISOString();
 
-    console.log(`Flows exported to ${this.flowPath}`);
-    console.log(`Operations exported to ${this.operationPath}`);
+    this.metadataManager.addSyncJob({
+      id: jobId,
+      type: jobType,
+      direction: "export",
+      status: "running",
+      createdAt: now,
+    });
+
+    try {
+      // flows are tied to operations, so we need to fetch all operations
+      const operations = await client.request(readOperations());
+      writeFileSync(
+        this.operationPath,
+        JSON.stringify(operations.map(this.setUserNull), null, 2)
+      );
+
+      const flows = await client.request(readFlows());
+      writeFileSync(
+        this.flowPath,
+        // empty operations because it is many-to-many relationship; relationship will be created when operations are imported
+        JSON.stringify(
+          flows.map(this.setUserNull).map(this.emptyOperations),
+          null,
+          2
+        )
+      );
+
+      // Track the number of items exported
+      const totalItems = operations.length + flows.length;
+      this.metadataManager.updateItemsCount(jobType, totalItems);
+
+      // Update sync status to synced
+      this.metadataManager.updateSyncStatus(jobType, "synced", now);
+
+      // Complete the sync job successfully
+      this.metadataManager.completeSyncJob(jobId, true);
+
+      console.log(`Flows exported to ${this.flowPath}`);
+      console.log(`Operations exported to ${this.operationPath}`);
+      console.log(
+        `Exported ${flows.length} flows and ${operations.length} operations`
+      );
+    } catch (error) {
+      // Update sync status to conflict if there was an error
+      this.metadataManager.updateSyncStatus(jobType, "conflict");
+
+      // Complete the sync job with error
+      this.metadataManager.completeSyncJob(
+        jobId,
+        false,
+        error instanceof Error ? error.message : String(error)
+      );
+
+      console.error("Error exporting flows:", error);
+      throw error;
+    }
   };
 
   importFlows = async () => {
-    await this.handleImportFlows();
-    await this.handleImportOperations();
-    console.log("Flows and operations imported successfully.");
+    // Create a new sync job
+    const jobId = uuidv4();
+    const jobType: ConfigType = "flows";
+    const now = new Date().toISOString();
+
+    this.metadataManager.addSyncJob({
+      id: jobId,
+      type: jobType,
+      direction: "import",
+      status: "running",
+      createdAt: now,
+    });
+
+    try {
+      await this.handleImportFlows();
+      await this.handleImportOperations();
+
+      // Update sync status to synced
+      this.metadataManager.updateSyncStatus(jobType, "synced", now);
+
+      // Complete the sync job successfully
+      this.metadataManager.completeSyncJob(jobId, true);
+
+      console.log("Flows and operations imported successfully.");
+    } catch (error) {
+      // Update sync status to conflict if there was an error
+      this.metadataManager.updateSyncStatus(jobType, "conflict");
+
+      // Complete the sync job with error
+      this.metadataManager.completeSyncJob(
+        jobId,
+        false,
+        error instanceof Error ? error.message : String(error)
+      );
+
+      console.error("Error importing flows:", error);
+      throw error;
+    }
   };
 
   private async handleImportFlows() {
@@ -124,6 +207,12 @@ export class FlowsManager {
     if (diffOperations.length) {
       await client.request(deleteOperations(diffOperations.map((o) => o.id)));
     }
+
+    // Update the item count after import
+    const totalItems =
+      incomingOperations.length +
+      JSON.parse(readFileSync(this.flowPath, "utf8")).length;
+    this.metadataManager.updateItemsCount("flows", totalItems);
   }
 
   private sortOperationsByDependency(

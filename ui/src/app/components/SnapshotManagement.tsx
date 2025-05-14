@@ -1,10 +1,29 @@
 "use client";
 
-import { useState } from "react";
-import { createSnapshot, compareSnapshot } from "../services/api";
+import { useState, useEffect } from "react";
+import {
+  createSnapshot,
+  compareSnapshot,
+  checkForSnapshots,
+} from "../services/api";
 
 export default function SnapshotManagement() {
   const [loading, setLoading] = useState(false);
+  const [hasSnapshots, setHasSnapshots] = useState(false);
+  const [lastSnapshotTime, setLastSnapshotTime] = useState<string | null>(null);
+
+  useEffect(() => {
+    const checkSnapshots = async () => {
+      try {
+        const { hasSnapshots, lastSnapshot } = await checkForSnapshots();
+        setHasSnapshots(hasSnapshots);
+        setLastSnapshotTime(lastSnapshot);
+      } catch (error) {
+        console.error("Failed to check snapshots:", error);
+      }
+    };
+    checkSnapshots();
+  }, []);
   const [result, setResult] = useState<{
     message: string;
     type: "success" | "error";
@@ -36,7 +55,7 @@ export default function SnapshotManagement() {
     try {
       const response = await compareSnapshot();
       setResult({
-        message: response.message,
+        message: `Found ${response.diffResults.totalInSnapshotOnly} Diff`,
         type: response.success ? "success" : "error",
       });
     } catch (error) {
@@ -100,7 +119,11 @@ export default function SnapshotManagement() {
           <button
             onClick={handleCompareSnapshot}
             disabled={loading}
-            className="px-5 py-2 bg-background border border-card-border text-foreground rounded-md hover:bg-gray-100 disabled:opacity-50 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 font-medium transition-colors shadow-sm"
+            className={`px-5 py-2 rounded-md font-medium transition-colors shadow-sm ${
+              hasSnapshots
+                ? "bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30 dark:bg-primary-light/20 dark:text-primary dark:border-primary/20 dark:hover:bg-primary-light/30"
+                : "bg-background border border-card-border text-foreground hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-700"
+            } disabled:opacity-50`}
           >
             {loading ? (
               <span className="flex items-center">

@@ -18,6 +18,11 @@ import {
 } from "./helper";
 import _ from "lodash";
 import FormData from "form-data";
+import { MetadataManager } from "./metadata";
+import { v4 as uuidv4 } from "uuid";
+
+// Import ConfigType from the same place it's defined in flows.ts
+type ConfigType = "flows" | "roles" | "settings" | "files" | "schema";
 
 export class FilesManager {
   private filePath: string = join(CONFIG_PATH, "files.json");
@@ -25,10 +30,13 @@ export class FilesManager {
   private assetPath: string = join(CONFIG_PATH, "assets");
   private immutableFields = ["filename_disk", "filename_download"];
   private backupField: string | null = null;
+  private metadataManager: MetadataManager;
 
-  constructor() {}
+  constructor() {
+    this.metadataManager = new MetadataManager();
+  }
 
-  private getBackupField = async (
+  public getBackupField = async (
     collection: "directus_files" | "directus_folders"
   ) => {
     const result = await client.request(readFieldsByCollection(collection));
@@ -38,7 +46,7 @@ export class FilesManager {
     this.backupField = backupField ? backupField.field : null;
   };
 
-  private getBackupFilter = () => {
+  public getBackupFilter = () => {
     return this.backupField ? { [this.backupField]: { _eq: true } } : {};
   };
 
@@ -368,60 +376,143 @@ export class FilesManager {
   exportFiles = async () => {
     ensureConfigDirs();
 
-    // backup folders first - only those with should backup set to true
-    await this.getBackupField("directus_folders");
-    const folders = await this.getRemoteFolders();
-    writeFileSync(this.folderPath, JSON.stringify(folders, null, 2));
+    // Create a new sync job
+    const jobId = uuidv4();
+    const jobType: ConfigType = "files";
+    const now = new Date().toISOString();
 
-    // backup files next - only those with should backup set to true
-    await this.getBackupField("directus_files");
-    let files: Record<string, any>[] = [];
+    this.metadataManager.addSyncJob({
+      id: jobId,
+      type: jobType,
+      direction: "export",
+      status: "running",
+      createdAt: now,
+    });
+
     try {
-      files = await client.request(
-        readFiles({
-          filter: this.getBackupFilter(),
-          fields: ["*"], // Ensure all fields are returned for filtering
-        })
-      );
+      // backup folders first - only those with should backup set to true
+      await this.getBackupField("directus_folders");
+      const folders = await this.getRemoteFolders();
+      writeFileSync(this.folderPath, JSON.stringify(folders, null, 2));
 
-      // Double-check backup flag in case filter didn't work
-      if (this.backupField && files.length > 0) {
-        files = files.filter(
-          (file) =>
-            file.hasOwnProperty(this.backupField!) &&
-            file[this.backupField!] === true
+      // backup files next - only those with should backup set to true
+      await this.getBackupField("directus_files");
+      let files: Record<string, any>[] = [];
+      try {
+        files = await client.request(
+          readFiles({
+            filter: this.getBackupFilter(),
+            fields: ["*"], // Ensure all fields are returned for filtering
+          })
+        );
+
+        // Double-check backup flag in case filter didn't work
+        if (this.backupField && files.length > 0) {
+          files = files.filter(
+            (file) =>
+              file.hasOwnProperty(this.backupField!) &&
+              file[this.backupField!] === true
+          );
+        }
+      } catch (error) {
+        files = await this.handleFieldPermissionError(
+          error,
+          "Error reading files with backup filter"
         );
       }
-    } catch (error) {
-      files = await this.handleFieldPermissionError(
-        error,
-        "Error reading files with backup filter"
+
+      writeFileSync(
+        this.filePath,
+        JSON.stringify(files.map(this.untrackIgnoredFields), null, 2)
       );
+
+      // Download and backup files concurrently with retries
+      const downloadPromises = files.map((file) => downloadFile(file));
+      await Promise.all(downloadPromises);
+
+      // Count the total number of items exported
+      const totalItems = folders.length + files.length;
+
+      // Track the number of items exported
+      this.metadataManager.updateItemsCount(jobType, totalItems);
+
+      // Update sync status to synced
+      this.metadataManager.updateSyncStatus(jobType, "synced", now);
+
+      // Complete the sync job successfully
+      this.metadataManager.completeSyncJob(jobId, true);
+
+      console.log(`Files exported to ${this.filePath}`);
+      console.log(`Folders exported to ${this.folderPath}`);
+      console.log(`Assets exported to ${this.assetPath}`);
+    } catch (error) {
+      // Update sync status to conflict if there was an error
+      this.metadataManager.updateSyncStatus(jobType, "conflict");
+
+      // Complete the sync job with error
+      this.metadataManager.completeSyncJob(
+        jobId,
+        false,
+        error instanceof Error ? error.message : String(error)
+      );
+
+      console.error("Error exporting files:", error);
+      throw error;
     }
-
-    writeFileSync(
-      this.filePath,
-      JSON.stringify(files.map(this.untrackIgnoredFields), null, 2)
-    );
-
-    // Download and backup files concurrently with retries
-    const downloadPromises = files.map((file) => downloadFile(file));
-    await Promise.all(downloadPromises);
-
-    console.log(`Files exported to ${this.filePath}`);
-    console.log(`Folders exported to ${this.folderPath}`);
-    console.log(`Assets exported to ${this.assetPath}`);
   };
 
   importFiles = async () => {
-    // import folders first
-    await this.getBackupField("directus_folders");
-    await this.handleImportFolders();
-    console.log("Folders imported successfully.");
+    // Create a new sync job
+    const jobId = uuidv4();
+    const jobType: ConfigType = "files";
+    const now = new Date().toISOString();
 
-    // import files next
-    await this.getBackupField("directus_files");
-    await this.handleImportFiles();
-    console.log("Files imported successfully.");
+    this.metadataManager.addSyncJob({
+      id: jobId,
+      type: jobType,
+      direction: "import",
+      status: "running",
+      createdAt: now,
+    });
+
+    try {
+      // import folders first
+      await this.getBackupField("directus_folders");
+      await this.handleImportFolders();
+      console.log("Folders imported successfully.");
+
+      // import files next
+      await this.getBackupField("directus_files");
+      await this.handleImportFiles();
+
+      // Count the total number of items imported
+      const folders = JSON.parse(readFileSync(this.folderPath, "utf8")).length;
+      const files = JSON.parse(readFileSync(this.filePath, "utf8")).length;
+      const totalItems = folders + files;
+
+      // Track the number of items imported
+      this.metadataManager.updateItemsCount(jobType, totalItems);
+
+      // Update sync status to synced
+      this.metadataManager.updateSyncStatus(jobType, "synced", now);
+
+      // Complete the sync job successfully
+      this.metadataManager.completeSyncJob(jobId, true);
+
+      console.log("Files imported successfully.");
+    } catch (error) {
+      // Update sync status to conflict if there was an error
+      this.metadataManager.updateSyncStatus(jobType, "conflict");
+
+      // Complete the sync job with error
+      this.metadataManager.completeSyncJob(
+        jobId,
+        false,
+        error instanceof Error ? error.message : String(error)
+      );
+
+      console.error("Error importing files:", error);
+      throw error;
+    }
   };
 }

@@ -24,6 +24,11 @@ import {
   extractErrorMessage,
   retryOperation,
 } from "./helper";
+import { MetadataManager } from "./metadata";
+import { v4 as uuidv4 } from "uuid";
+
+// Import ConfigType from the same place it's defined in flows.ts
+type ConfigType = "flows" | "roles" | "settings" | "files" | "schema";
 
 /**
  * Find the Public policy in a list of policies
@@ -56,10 +61,10 @@ export function findPublicRole(
 }
 
 interface Defaults {
-  defaultRole: any;
+  defaultRole: string;
   adminRoleIds: string[];
-  defaultAccess: any[];
-  defaultPolicy: any[];
+  defaultAccess: string[];
+  defaultPolicy: string[];
   publicRoleId?: string;
   publicPolicyId?: string;
 }
@@ -69,7 +74,11 @@ export class RolesManager {
   private policiesPath: string = join(CONFIG_PATH, "policies.json");
   private accessPath: string = join(CONFIG_PATH, "access.json");
   private permissionsPath: string = join(CONFIG_PATH, "permissions.json");
-  constructor() {}
+  private metadataManager: MetadataManager;
+
+  constructor() {
+    this.metadataManager = new MetadataManager();
+  }
 
   private emptyPolicies(record: Record<string, any>) {
     if (record["policies"]) {
@@ -193,12 +202,72 @@ export class RolesManager {
 
   exportRoles = async () => {
     ensureConfigDirs();
-    const defaults = await this.retrieveDefaults();
 
-    await this.exportRolesData(defaults);
-    await this.exportPoliciesData(defaults);
-    await this.exportAccessData(defaults);
-    await this.exportPermissionsData();
+    // Create a new sync job
+    const jobId = uuidv4();
+    const jobType: ConfigType = "roles";
+    const now = new Date().toISOString();
+
+    this.metadataManager.addSyncJob({
+      id: jobId,
+      type: jobType,
+      direction: "export",
+      status: "running",
+      createdAt: now,
+    });
+
+    try {
+      // Get default admin roles that should be excluded
+      const defaults = await this.retrieveDefaults();
+
+      // Export roles
+      await this.exportRolesData(defaults);
+
+      // Export policies
+      await this.exportPoliciesData(defaults);
+
+      // Export access entries
+      await this.exportAccessData(defaults);
+
+      // Export permissions
+      await this.exportPermissionsData();
+
+      // Count the total number of items exported
+      const roles = JSON.parse(readFileSync(this.rolePath, "utf8")).length;
+      const policies = JSON.parse(
+        readFileSync(this.policiesPath, "utf8")
+      ).length;
+      const access = JSON.parse(readFileSync(this.accessPath, "utf8")).length;
+      const permissions = JSON.parse(
+        readFileSync(this.permissionsPath, "utf8")
+      ).length;
+
+      const totalItems = roles + policies + access + permissions;
+
+      // Track the number of items exported
+      this.metadataManager.updateItemsCount(jobType, totalItems);
+
+      // Update sync status to synced
+      this.metadataManager.updateSyncStatus(jobType, "synced", now);
+
+      // Complete the sync job successfully
+      this.metadataManager.completeSyncJob(jobId, true);
+
+      console.log("Roles export completed successfully");
+    } catch (error) {
+      // Update sync status to conflict if there was an error
+      this.metadataManager.updateSyncStatus(jobType, "conflict");
+
+      // Complete the sync job with error
+      this.metadataManager.completeSyncJob(
+        jobId,
+        false,
+        error instanceof Error ? error.message : String(error)
+      );
+
+      console.error("Error exporting roles:", error);
+      throw error;
+    }
   };
 
   // Using the exported findPublicRole function
@@ -865,6 +934,19 @@ export class RolesManager {
   };
 
   importRoles = async () => {
+    // Create a new sync job
+    const jobId = uuidv4();
+    const jobType: ConfigType = "roles";
+    const now = new Date().toISOString();
+
+    this.metadataManager.addSyncJob({
+      id: jobId,
+      type: jobType,
+      direction: "import",
+      status: "running",
+      createdAt: now,
+    });
+
     const results = {
       roles: { success: true, message: "" },
       policies: { success: true, message: "" },
@@ -914,6 +996,19 @@ export class RolesManager {
       );
     }
 
+    // Count the total number of items imported
+    const roles = JSON.parse(readFileSync(this.rolePath, "utf8")).length;
+    const policies = JSON.parse(readFileSync(this.policiesPath, "utf8")).length;
+    const access = JSON.parse(readFileSync(this.accessPath, "utf8")).length;
+    const permissions = JSON.parse(
+      readFileSync(this.permissionsPath, "utf8")
+    ).length;
+
+    const totalItems = roles + policies + access + permissions;
+
+    // Track the number of items imported
+    this.metadataManager.updateItemsCount(jobType, totalItems);
+
     // Print summary
     console.log("\n=== Role Import Summary ===");
     let hasFailures = false;
@@ -928,8 +1023,24 @@ export class RolesManager {
     }
 
     if (hasFailures) {
+      // Update sync status to conflict if there was an error
+      this.metadataManager.updateSyncStatus(jobType, "conflict");
+
+      // Complete the sync job with error
+      this.metadataManager.completeSyncJob(
+        jobId,
+        false,
+        "Some role-related components failed to import"
+      );
+
       throw new Error("Some role-related components failed to import");
     } else {
+      // Update sync status to synced
+      this.metadataManager.updateSyncStatus(jobType, "synced", now);
+
+      // Complete the sync job successfully
+      this.metadataManager.completeSyncJob(jobId, true);
+
       console.log(
         "\nRoles, policies, access and permissions imported successfully."
       );

@@ -41,6 +41,10 @@ RUN mkdir -p /app/config && \
 # Set default environment variables
 ENV DIRECTUS_CT_URL=http://localhost:8055
 ENV DIRECTUS_CT_CONFIG_PATH=/app/config
+ENV DIRECTUS_CT_API_PORT=3001
+
+# Expose API port
+EXPOSE 3001
 
 # Use entrypoint script
 ENTRYPOINT ["/entrypoint.sh"]
