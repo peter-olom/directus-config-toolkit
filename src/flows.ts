@@ -6,7 +6,6 @@ import {
   readFlows,
   readOperations,
   updateFlow,
-  updateOperation,
 } from "@directus/sdk";
 import { writeFileSync, readFileSync } from "fs";
 import { join } from "path";
@@ -156,23 +155,35 @@ export class FlowsManager {
   };
 
   private async handleImportFlows() {
-    const incompingFlows = JSON.parse(readFileSync(this.flowPath, "utf8"));
+    const incomingFlows = JSON.parse(readFileSync(this.flowPath, "utf8"));
     const destinationFlows = await client.request(readFlows());
 
-    for (const flow of incompingFlows) {
-      const existingFlow = destinationFlows.find((f) => f.id === flow.id);
-      if (existingFlow) {
-        if (_.isEqual(existingFlow, flow)) {
-          await client.request(updateFlow(flow.id, flow));
-        }
-      } else {
-        await client.request(createFlow(flow));
-      }
-    }
+    console.log(`Importing ${incomingFlows.length} flows`);
 
-    const diffFlows = _.differenceBy(destinationFlows, incompingFlows, "id");
-    if (diffFlows.length) {
-      await client.request(deleteFlows(diffFlows.map((f) => f.id)));
+    try {
+      // First update or create flows
+      for (const flow of incomingFlows) {
+        const existingFlow = destinationFlows.find((f) => f.id === flow.id);
+        if (existingFlow) {
+          if (!_.isEqual(existingFlow, flow)) {
+            await client.request(updateFlow(flow.id, flow));
+          }
+        } else {
+          await client.request(createFlow(flow));
+        }
+      }
+
+      // Then delete any flows that no longer exist in the import file
+      const diffFlows = _.differenceBy(destinationFlows, incomingFlows, "id");
+      if (diffFlows.length) {
+        console.log(`Deleting ${diffFlows.length} flows that no longer exist`);
+        await client.request(deleteFlows(diffFlows.map((f) => f.id)));
+      }
+
+      console.log("All flows processed successfully");
+    } catch (error) {
+      console.error("Error processing flows:", error);
+      throw error;
     }
   }
 
@@ -182,30 +193,41 @@ export class FlowsManager {
     );
     const destinationOperations = await client.request(readOperations());
 
+    // Get all flows to identify which operations need to be regenerated
+    const incomingFlows = JSON.parse(readFileSync(this.flowPath, "utf8"));
+
+    // Delete all existing operations for the flows we're importing
+    // This ensures we don't have uniqueness constraint violations for the "resolve" field
+    const operationsToDelete = destinationOperations.filter((operation) => {
+      // Only delete operations that belong to flows we're importing
+      return incomingFlows.some(
+        (flow: { id: any }) => operation.flow === flow.id
+      );
+    });
+
+    if (operationsToDelete.length) {
+      console.log(
+        `Deleting ${operationsToDelete.length} existing operations for the imported flows`
+      );
+      await client.request(
+        deleteOperations(operationsToDelete.map((o) => o.id))
+      );
+    }
+
     // Sort operations based on dependencies
     const sortedOperations =
       this.sortOperationsByDependency(incomingOperations);
 
-    for (const operation of sortedOperations) {
-      const existingOperation = destinationOperations.find(
-        (o) => o.id === operation.id
-      );
-      if (existingOperation) {
-        if (!_.isEqual(existingOperation, operation)) {
-          await client.request(updateOperation(operation.id, operation));
-        }
-      } else {
+    // Create all operations from scratch
+    console.log(`Creating ${sortedOperations.length} operations`);
+    try {
+      for (const operation of sortedOperations) {
         await client.request(createOperation(operation));
       }
-    }
-
-    const diffOperations = _.differenceBy(
-      destinationOperations,
-      incomingOperations,
-      "id"
-    );
-    if (diffOperations.length) {
-      await client.request(deleteOperations(diffOperations.map((o) => o.id)));
+      console.log("All operations created successfully");
+    } catch (error) {
+      console.error("Error creating operations:", error);
+      throw error;
     }
 
     // Update the item count after import
