@@ -1,0 +1,75 @@
+{
+  "name": "@devrue/directus-config-toolkit",
+  "version": "0.4.6",
+  "main": "./dist/index.js",
+  "type": "module",
+  "exports": "./dist/index.js",
+  "bin": {
+    "dct": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "release": "release-it"
+  },
+  "keywords": [],
+  "author": "Peter Olom",
+  "license": "MIT",
+  "description": "A toolkit for managing Directus configurations",
+  "dependencies": {
+    "@directus/sdk": "^18.0.0",
+    "axios": "^1.7.7",
+    "commander": "^11.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.18.3",
+    "form-data": "^4.0.1",
+    "lodash": "^4.17.21",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@release-it/conventional-changelog": "^9.0.3",
+    "@types/express": "^5.0.1",
+    "@types/lodash": "^4.17.13",
+    "@types/uuid": "^10.0.0",
+    "concurrently": "^8.2.2",
+    "nodemon": "^3.0.3",
+    "release-it": "^17.10.0",
+    "ts-node": "^10.9.2",
+    "tsup": "^7.2.0",
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/peter-olom/directus-config-toolkit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/peter-olom/directus-config-toolkit/issues"
+  },
+  "homepage": "https://github.com/peter-olom/directus-config-toolkit#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "release-it": {
+    "git": {
+      "commitMessage": "chore: release ${version}",
+      "tagName": "v${version}"
+    },
+    "npm": {
+      "publish": true
+    },
+    "github": {
+      "release": true
+    },
+    "plugins": {
+      "@release-it/conventional-changelog": {
+        "preset": "angular"
+      }
+    }
+  }
+}
