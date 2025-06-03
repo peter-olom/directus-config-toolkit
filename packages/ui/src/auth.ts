@@ -1,5 +1,12 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
+import type { CookieOption } from "@auth/core/types";
+
+const cookieOptions: CookieOption["options"] = {
+  httpOnly: true,
+  sameSite: "lax",
+  secure: process.env.NODE_ENV === "production",
+};
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   providers: [
@@ -16,11 +23,6 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       async authorize(credentials) {
         const validUsername = process.env.DCT_UI_USERNAME;
         const validPassword = process.env.DCT_UI_PASSWORD;
-        console.log(
-          "Validating credentials",
-          `Username: ${validUsername ? "provided" : "not provided"}`,
-          `Password: ${validPassword ? "provided" : "not provided"}`
-        );
         if (!validUsername || !validPassword) return null;
         if (
           credentials?.username === validUsername &&
@@ -33,16 +35,6 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     }),
   ],
   session: { strategy: "jwt" },
-  cookies: {
-    sessionToken: {
-      name: "dct-session",
-      options: {
-        httpOnly: true,
-        sameSite: "lax",
-        secure: process.env.NODE_ENV === "production",
-      },
-    },
-  },
   pages: {
     signIn: "/login",
   },
@@ -54,6 +46,20 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     async session({ session, token }) {
       if (token && session.user) session.user.id = String(token.id);
       return session;
+    },
+  },
+  cookies: {
+    sessionToken: {
+      name: "dct-session",
+      options: cookieOptions,
+    },
+    callbackUrl: {
+      name: "dct-callback-url",
+      options: cookieOptions,
+    },
+    csrfToken: {
+      name: "dct-csrf",
+      options: cookieOptions,
     },
   },
 });

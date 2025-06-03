@@ -1,0 +1,11 @@
+{
+	"name": "directus-config-toolkit",
+	"private": true,
+	"workspaces": [
+		"packages/core",
+		"packages/ui"
+	],
+	"scripts": {
+		"build": "npm run build --workspaces"
+	}
+}

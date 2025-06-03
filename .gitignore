@@ -5,3 +5,5 @@ config
 *.http
 
 *.tgz
+archive
+*.sql

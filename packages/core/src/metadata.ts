@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "fs";
 import { join } from "path";
-import { CONFIG_PATH } from "./helper";
+import { CONFIG_PATH, ensureConfigDirs } from "./helper";
 
 export type ConfigType =
   | "flows"
@@ -74,6 +74,7 @@ export class MetadataManager {
   };
 
   constructor() {
+    ensureConfigDirs(); // Ensure config directory exists before file operations
     this.loadMetadata();
   }
 
