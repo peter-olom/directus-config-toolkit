@@ -5,8 +5,9 @@ import { auth } from "@/auth";
 
 export async function GET(
   request: Request,
-  { params }: { params: { type: string; snapshotId: string } }
+  props: { params: Promise<{ type: string; snapshotId: string }> }
 ) {
+  const params = await props.params;
   const session = await auth();
   if (!session) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {

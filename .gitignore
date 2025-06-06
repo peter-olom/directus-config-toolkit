@@ -1,10 +1,10 @@
 node_modules
 .env
 dist
-config
-*.http
+/config
+/audit
 
+*.http
 *.tgz
 archive
 *.sql
-audit

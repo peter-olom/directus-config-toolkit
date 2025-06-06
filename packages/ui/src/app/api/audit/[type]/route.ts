@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "fs-extra";
 import path from "path";
 import { auth } from "@/auth";
+import { AuditLogEntry } from "@/app/types";
 
 export async function GET(request: Request, props: { params: Promise<{ type: string }> }) {
   const params = await props.params;
@@ -40,31 +41,34 @@ export async function GET(request: Request, props: { params: Promise<{ type: str
       );
     }
 
-    const snapshotsDir = path.join(auditPath, "snapshots", type);
+    const auditLogPath = path.join(auditPath, "audit.ndjson");
 
-    // Check if directory exists
-    if (!(await fs.pathExists(snapshotsDir))) {
-      // Return empty array if no snapshots yet
+    // Check if file exists
+    if (!(await fs.pathExists(auditLogPath))) {
       return NextResponse.json([]);
     }
 
-    // Read directory contents
-    const files = await fs.readdir(snapshotsDir);
+    // Read and parse the NDJSON file
+    const auditLogContent = await fs.readFile(auditLogPath, "utf8");
+    const lines = auditLogContent.trim().split("\n").filter(Boolean);
 
-    // Filter for JSON files and create snapshot info objects
-    const snapshots = files
-      .filter((file) => file.endsWith(".json"))
-      .map((fileName) => ({
-        id: fileName,
-        path: path.join(snapshotsDir, fileName),
-      }))
-      .sort((a, b) => a.id.localeCompare(b.id));
+    // Parse each line as JSON and filter by itemType
+    const auditEntries = lines
+      .map((line) => {
+        try {
+          return JSON.parse(line) as AuditLogEntry;
+        } catch (e) {
+          console.error("Failed to parse audit log entry:", e);
+          return null;
+        }
+      })
+      .filter((entry) => entry !== null && entry.itemType === type);
 
-    return NextResponse.json(snapshots);
+    return NextResponse.json(auditEntries);
   } catch (error) {
-    console.error(`Error reading snapshots for ${type}:`, error);
+    console.error(`Error reading audit logs for ${type}:`, error);
     return NextResponse.json(
-      { error: `Failed to read ${type} snapshots` },
+      { error: `Failed to read audit logs` },
       { status: 500 }
     );
   }

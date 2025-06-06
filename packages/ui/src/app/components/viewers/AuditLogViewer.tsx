@@ -48,7 +48,7 @@ export default function AuditLogViewer({ type }: AuditLogViewerProps) {
   const formatDate = (timestamp: string): string => {
     try {
       return new Date(timestamp).toLocaleString();
-    } catch (e) {
+    } catch {
       return timestamp;
     }
   };
@@ -70,7 +70,7 @@ export default function AuditLogViewer({ type }: AuditLogViewerProps) {
   if (!type) {
     return (
       <EmptyState
-        type="info"
+        type="empty"
         message="Select a configuration type from the left panel to view its audit logs."
       />
     );
@@ -87,7 +87,7 @@ export default function AuditLogViewer({ type }: AuditLogViewerProps) {
   if (auditLogs.length === 0) {
     return (
       <EmptyState
-        type="info"
+        type="empty"
         message={`No audit logs found for ${type}. Audit logs are created when configurations are imported or exported.`}
       />
     );

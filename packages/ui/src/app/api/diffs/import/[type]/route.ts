@@ -3,10 +3,23 @@ import fs from "fs-extra";
 import path from "path";
 import { auth } from "@/auth";
 
+interface ImportDiff {
+  timestamp: string;
+  preview?: {
+    before: unknown;
+    local: unknown;
+  };
+  actual?: {
+    before: unknown;
+    after: unknown;
+  };
+}
+
 export async function GET(
   request: Request,
-  { params }: { params: { type: string } }
+  props: { params: Promise<{ type: string }> }
 ) {
+  const params = await props.params;
   const session = await auth();
   if (!session) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -93,7 +106,7 @@ export async function GET(
     const set = importSets[latestTs];
 
     // Prepare the result
-    const result: any = {
+    const result: ImportDiff = {
       timestamp: latestTs,
     };
 
