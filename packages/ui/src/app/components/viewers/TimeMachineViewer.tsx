@@ -194,7 +194,7 @@ export default function TimeMachineViewer({ type }: TimeMachineViewerProps) {
         {type.charAt(0).toUpperCase() + type.slice(1)} History Timeline
       </h2>
 
-      <div className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+      <div className="text-sm text-gray-500 dark:text-amber-300/80 mb-4">
         Showing changes between {snapshots.length} regular snapshots (excluding
         imports)
       </div>
@@ -203,18 +203,18 @@ export default function TimeMachineViewer({ type }: TimeMachineViewerProps) {
         {diffPairs.map((pair) => (
           <div
             key={`${pair.newer.id}-${pair.older.id}`}
-            className="border border-gray-200 dark:border-gray-700 rounded-lg"
+            className="border border-gray-200 dark:border-[#3b2d27] rounded-lg"
           >
-            <div className="p-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 rounded-t-lg">
+            <div className="p-3 bg-gray-50 dark:bg-[#2a201c] border-b border-gray-200 dark:border-[#3b2d27] rounded-t-lg">
               <div className="flex items-center justify-between mb-1">
                 <h3 className="text-sm font-medium">Changes from:</h3>
               </div>
               <div className="flex items-center gap-2 text-sm">
-                <span className="font-mono bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">
+                <span className="font-mono bg-gray-100 dark:bg-[#3b2d27] px-2 py-1 rounded">
                   {formatSnapshotDate(pair.older.id)}
                 </span>
                 <span>→</span>
-                <span className="font-mono bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">
+                <span className="font-mono bg-gray-100 dark:bg-[#3b2d27] px-2 py-1 rounded">
                   {formatSnapshotDate(pair.newer.id)}
                 </span>
               </div>

@@ -168,8 +168,8 @@ export default function ItemTypeNavigator({
   };
 
   return (
-    <div className="h-full p-4 overflow-auto bg-gray-50 dark:bg-gray-900">
-      <h2 className="text-xl font-semibold mb-6 text-foreground flex items-center space-x-2">
+    <div className="h-full p-4 overflow-auto bg-[#f5f0e8]/80 dark:bg-[#1a1310]">
+      <h2 className="text-xl font-semibold mb-6 text-[#7d6957] dark:text-amber-100 flex items-center space-x-2">
         <FaWrench className="text-primary" />
         <span>Configuration Types</span>
       </h2>
@@ -182,7 +182,7 @@ export default function ItemTypeNavigator({
               className={`w-full text-left p-4 rounded-lg flex items-start space-x-3 transition-all duration-200 relative ${
                 selectedType === config.type
                   ? "bg-primary/5 dark:bg-primary/10 border-l-4 border-primary shadow-sm"
-                  : "hover:bg-gray-50 dark:hover:bg-gray-800/50 border-l-4 border-transparent"
+                  : "hover:bg-[#f5f0e8]/70 dark:hover:bg-[#2a201c]/50 border-l-4 border-transparent"
               }`}
             >
               <div className="flex-shrink-0">
@@ -190,7 +190,7 @@ export default function ItemTypeNavigator({
                   className={`w-5 h-5 mt-0.5 transition-colors duration-200 ${
                     selectedType === config.type
                       ? "text-primary"
-                      : "text-gray-400 group-hover:text-gray-500 dark:text-gray-500 dark:group-hover:text-gray-400"
+                      : "text-[#96816f] group-hover:text-[#7d6957] dark:text-amber-300/70 dark:group-hover:text-amber-300"
                   }`}
                 />
               </div>
@@ -201,23 +201,23 @@ export default function ItemTypeNavigator({
                       className={`font-medium transition-colors duration-200 ${
                         selectedType === config.type
                           ? "text-primary"
-                          : "text-gray-900 dark:text-gray-100 group-hover:text-gray-700 dark:group-hover:text-gray-300"
+                          : "text-[#7d6957] dark:text-amber-100 group-hover:text-[#63513f] dark:group-hover:text-amber-200"
                       }`}
                     >
                       {config.label}
                     </h3>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 transition-colors duration-200 group-hover:text-gray-600 dark:group-hover:text-gray-300">
+                    <p className="text-sm text-[#96816f] dark:text-amber-300/80 mt-0.5 transition-colors duration-200 group-hover:text-[#7d6957] dark:group-hover:text-amber-300">
                       {config.description}
                     </p>
                   </div>
                   <span
                     className={`text-xs px-2 py-1 rounded-full transition-colors duration-200 ${
                       isLoading[config.type]
-                        ? "bg-gray-100 dark:bg-gray-800/80 text-gray-500 dark:text-gray-400"
+                        ? "bg-[#e6ddd1]/70 dark:bg-[#2a201c]/80 text-[#7d6957] dark:text-amber-300"
                         : snapshotCounts[config.type]?.exports ||
                           snapshotCounts[config.type]?.imports
-                        ? "bg-primary/10 text-primary"
-                        : "bg-gray-100 dark:bg-gray-800/80 text-gray-500 dark:text-gray-400"
+                        ? "bg-primary/10 text-primary dark:text-primary"
+                        : "bg-[#e6ddd1]/70 dark:bg-[#2a201c]/80 text-[#7d6957] dark:text-amber-300"
                     }`}
                   >
                     {isLoading[config.type]
@@ -231,7 +231,7 @@ export default function ItemTypeNavigator({
             {/* Show error if exists */}
             {selectedType === config.type && error && error[config.type] && (
               <div className="mt-2 ml-12">
-                <div className="text-sm text-red-600 dark:text-red-400 p-2 rounded bg-red-50 dark:bg-red-900/20">
+                <div className="text-sm text-error-dark dark:text-error p-2 rounded bg-error-light/30 dark:bg-error-light/10">
                   Error: {error[config.type]}
                 </div>
               </div>

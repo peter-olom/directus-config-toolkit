@@ -32,9 +32,9 @@ export default function Button({
     primary:
       "bg-primary-light/25 text-primary hover:bg-primary-light/40 disabled:opacity-50 dark:bg-primary-light/10 dark:text-primary dark:hover:bg-primary-light/20",
     secondary:
-      "bg-gray-100 text-gray-700 hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600",
+      "bg-gray-100 text-gray-700 hover:bg-gray-200 disabled:opacity-50 dark:bg-[#3b2d27] dark:text-amber-300/80 dark:hover:bg-[#4d3c34]",
     outline:
-      "bg-transparent border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800",
+      "bg-transparent border border-gray-200 text-gray-700 hover:bg-gray-100/70 disabled:opacity-50 dark:border-[#3b2d27] dark:text-amber-300/80 dark:hover:bg-[#2a201c]",
   };
 
   const classes = `${baseStyles} ${sizeClasses[size]} ${variantClasses[variant]} ${className}`;

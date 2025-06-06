@@ -130,15 +130,23 @@ export default function SnapshotHistoryStats({
   }, [type, formatSnapshotDate, extractDateFromSnapshotId]);
 
   if (loading) {
-    return <div className="text-xs text-gray-500">Loading history...</div>;
+    return (
+      <div className="text-xs text-gray-500 dark:text-amber-300/70">
+        Loading history...
+      </div>
+    );
   }
 
   if (stats.total === 0) {
-    return <div className="text-xs text-gray-500">No history available</div>;
+    return (
+      <div className="text-xs text-gray-500 dark:text-amber-300/70">
+        No history available
+      </div>
+    );
   }
 
   return (
-    <div className="text-xs text-gray-500 mt-1">
+    <div className="text-xs text-gray-500 dark:text-amber-300/70 mt-1">
       <div className="flex justify-between items-center">
         <span className="flex items-center">
           <svg

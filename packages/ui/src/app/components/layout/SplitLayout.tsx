@@ -18,7 +18,7 @@ export default function SplitLayout({
   return (
     <div className="flex flex-col lg:flex-row w-full h-full flex-1">
       {/* Left panel - 40% on large screens, full width on small screens */}
-      <div className="flex-shrink-0 w-full lg:w-2/6 border-r border-gray-200 dark:border-gray-800 overflow-y-auto">
+      <div className="flex-shrink-0 w-full lg:w-2/6 border-r border-gray-200 dark:border-[#3b2d27] overflow-y-auto">
         {leftPanel}
       </div>
 

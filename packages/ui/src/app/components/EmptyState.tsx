@@ -32,11 +32,11 @@ export default function EmptyState({
   return (
     <div className="flex flex-col items-center justify-center p-8 text-center h-full w-full">
       {type === "loading" && (
-        <div className="w-8 h-8 border-4 border-gray-300 border-t-blue-500 rounded-full animate-spin mb-4" />
+        <div className="w-8 h-8 border-4 border-gray-300/40 dark:border-[#3b2d27] border-t-amber-500 dark:border-t-amber-500 rounded-full animate-spin mb-4" />
       )}
 
       {type === "error" && (
-        <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4">
+        <div className="w-12 h-12 bg-red-100/80 text-red-600 rounded-full flex items-center justify-center mb-4">
           <svg
             xmlns="http://www.w3.org/2000/svg"
             className="h-6 w-6"
@@ -55,7 +55,7 @@ export default function EmptyState({
       )}
 
       {type === "empty" && (
-        <div className="w-12 h-12 bg-gray-100 text-gray-600 rounded-full flex items-center justify-center mb-4">
+        <div className="w-12 h-12 bg-gray-200/40 dark:bg-[#3b2d27] text-gray-700 dark:text-amber-300/80 rounded-full flex items-center justify-center mb-4">
           <svg
             xmlns="http://www.w3.org/2000/svg"
             className="h-6 w-6"
@@ -73,7 +73,9 @@ export default function EmptyState({
         </div>
       )}
 
-      <p className="text-lg font-medium mb-2">{message}</p>
+      <p className="text-lg font-medium mb-2 text-gray-700 dark:text-amber-100">
+        {message}
+      </p>
 
       {type === "error" && retryCount >= 3 && (
         <button
@@ -81,7 +83,7 @@ export default function EmptyState({
             setRetryCount(0);
             refreshStatus();
           }}
-          className="mt-2 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+          className="mt-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded transition-colors"
         >
           Retry
         </button>

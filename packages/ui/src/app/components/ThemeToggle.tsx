@@ -23,7 +23,7 @@ export default function ThemeToggle() {
   return (
     <button
       onClick={cycleTheme}
-      className="flex items-center justify-center p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors border border-transparent hover:border-gray-200 dark:hover:border-gray-700"
+      className="flex items-center justify-center p-2 rounded-md hover:bg-[#f5f0e8]/70 dark:hover:bg-[#2a201c] transition-colors border border-transparent hover:border-[#e6ddd1] dark:hover:border-[#3b2d27]"
       aria-label="Toggle theme"
     >
       {theme === "dark" ? (

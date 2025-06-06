@@ -1,8 +1,8 @@
 "use client";
 
-import { signOut } from "@/auth";
 import ThemeToggle from "./ThemeToggle";
 import Image from "next/image";
+import { signOut } from "next-auth/react";
 
 export default function Navbar() {
   return (
@@ -14,9 +14,8 @@ export default function Navbar() {
               <Image
                 src="/dct-logo-web.png"
                 alt="Directus Config Toolkit"
-                width={64}
+                width={44}
                 height={64}
-                className="transition-all duration-200 dark:invert dark:brightness-[0.87] dark:contrast-[1.5] dark:saturate-0"
               />
               <h1 className="text-xl font-bold text-foreground">
                 Directus Config Toolkit
@@ -25,8 +24,8 @@ export default function Navbar() {
           </div>
           <div className="flex items-center gap-4">
             <button
-              onClick={() => signOut()}
-              className="px-3 py-1 rounded-md text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
+              onClick={async () => await signOut()}
+              className="px-3 py-1 rounded-md text-sm text-[#7d6957] hover:text-[#63513f] dark:text-amber-300 dark:hover:text-amber-100 hover:bg-[#f5f0e8]/70 dark:hover:bg-[#2a201c]"
             >
               Logout
             </button>

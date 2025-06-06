@@ -184,7 +184,7 @@ export default function ImportDiffViewer({ type }: ImportDiffViewerProps) {
       {content ? (
         <div className="h-[calc(100%-11rem)]">
           <h3 className="font-medium text-md mb-2">{content.title}</h3>
-          <div className="border border-gray-200 dark:border-gray-700 rounded-lg h-full">
+          <div className="border border-gray-200 dark:border-[#3b2d27] rounded-lg h-full">
             <DiffEditor
               height="100%"
               original={content.original}

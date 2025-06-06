@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
+import ThemeToggle from "./ThemeToggle";
+import Image from "next/image";
 
 export default function LoginForm() {
   const [username, setUsername] = useState("");
@@ -38,14 +40,24 @@ export default function LoginForm() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-background">
+      <div className="absolute top-4 right-4">
+        <ThemeToggle />
+      </div>
       <div className="w-full max-w-md">
+        <div className="flex flex-col items-center mb-6">
+          <Image
+            src="/dct-logo.png"
+            alt="Directus Config Toolkit"
+            className="mb-2"
+            width={164}
+            height={164}
+            style={{ filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.07))" }}
+          />
+        </div>
         <div className="bg-card shadow-md rounded-lg px-8 pt-6 pb-8 mb-4 border border-card-border">
           <div className="text-center mb-6">
-            <h1 className="text-2xl font-bold text-foreground">
-              Directus Config Toolkit
-            </h1>
-            <p className="text-gray-600 dark:text-gray-400 mt-2">
+            <p className="text-[#7d6957] dark:text-amber-300/80 mt-2">
               Sign in to continue
             </p>
           </div>
@@ -57,13 +69,13 @@ export default function LoginForm() {
           <form onSubmit={handleSubmit}>
             <div className="mb-4">
               <label
-                className="block text-gray-700 dark:text-gray-300 text-sm font-bold mb-2"
+                className="block text-[#7d6957] dark:text-amber-300/80 text-sm font-bold mb-2"
                 htmlFor="username"
               >
                 Username
               </label>
               <input
-                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 dark:text-gray-300 leading-tight focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-gray-800 dark:border-gray-700"
+                className="shadow appearance-none border border-[#e6ddd1]/80 rounded w-full py-2 px-3 text-[#7d6957] dark:text-amber-100 leading-tight focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-[#2a201c] dark:border-[#3b2d27]"
                 id="username"
                 type="text"
                 placeholder="Username"
@@ -74,13 +86,13 @@ export default function LoginForm() {
             </div>
             <div className="mb-6">
               <label
-                className="block text-gray-700 dark:text-gray-300 text-sm font-bold mb-2"
+                className="block text-[#7d6957] dark:text-amber-300/80 text-sm font-bold mb-2"
                 htmlFor="password"
               >
                 Password
               </label>
               <input
-                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 dark:text-gray-300 leading-tight focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-gray-800 dark:border-gray-700"
+                className="shadow appearance-none border border-[#e6ddd1]/80 rounded w-full py-2 px-3 text-[#7d6957] dark:text-amber-100 leading-tight focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-[#2a201c] dark:border-[#3b2d27]"
                 id="password"
                 type="password"
                 placeholder="Password"
@@ -91,7 +103,7 @@ export default function LoginForm() {
             </div>
             <div className="flex items-center justify-center">
               <button
-                className="w-full bg-primary hover:bg-primary-dark text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline disabled:opacity-50"
+                className="w-full bg-[#7d6957] hover:bg-[#63513f] text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline disabled:opacity-50 transition-colors"
                 type="submit"
                 disabled={loading}
               >
