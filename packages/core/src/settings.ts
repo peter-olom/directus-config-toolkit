@@ -8,11 +8,9 @@ import {
 } from "@directus/sdk";
 import { readFileSync, writeFileSync } from "fs";
 import { findPublicRole } from "./roles";
-import { MetadataManager } from "./metadata";
 import { v4 as uuidv4 } from "uuid";
-
-// Import ConfigType from the same place it's defined in flows.ts
-type ConfigType = "flows" | "roles" | "settings" | "files" | "schema";
+import { AuditManager } from "./audit";
+import { ConfigType } from "./types/generic";
 
 interface Role {
   id: string;
@@ -20,69 +18,100 @@ interface Role {
   icon?: string;
 }
 
+// Define fields that are supported by the SDK
+const SDK_SUPPORTED_FIELDS = [
+  "project_name",
+  "project_url",
+  "project_color",
+  "project_logo",
+  "public_foreground",
+  "public_background",
+  "public_note",
+  "auth_login_attempts",
+  "auth_password_policy",
+  "storage_asset_transform",
+  "storage_asset_presets",
+  "custom_css",
+  "basemaps",
+  "module_bar",
+  "custom_aspect_ratios",
+  "storage_default_folder",
+  "mapbox_key",
+  "project_descriptor",
+  "default_language",
+  "public_favicon",
+  "default_appearance",
+  "default_theme_light",
+  "theme_light_overrides",
+  "default_theme_dark",
+  "theme_dark_overrides",
+  "report_error_url",
+  "report_bug_url",
+  "report_feature_url",
+];
+
+// Define fields that might cause foreign key constraints
+const FOREIGN_KEY_FIELDS = [
+  "project_logo",
+  "public_foreground",
+  "public_background",
+  "storage_default_folder",
+  "public_favicon",
+];
+
+// Define additional fields supported by the API but not in the SDK types
+const UNSUPPORTED_FIELDS = [
+  "public_registration",
+  "public_registration_role",
+  "public_registration_verify_email",
+  "public_registration_email_filter",
+  "visual_editor_urls",
+];
+
 export class SettingsManager {
   private outputPath: string = join(CONFIG_PATH, "settings.json");
-  private metadataManager: MetadataManager;
-
-  constructor() {
-    this.metadataManager = new MetadataManager();
-  }
+  private auditManager: AuditManager = new AuditManager();
 
   exportSettings = async () => {
     ensureConfigDirs();
-
-    // Create a new sync job
-    const jobId = uuidv4();
-    const jobType: ConfigType = "settings";
-    const now = new Date().toISOString();
-
-    this.metadataManager.addSyncJob({
-      id: jobId,
-      type: jobType,
-      direction: "export",
-      status: "running",
-      createdAt: now,
-    });
 
     try {
       const settings = await client.request(readSettings());
       if (settings.id === null) {
         // Handle case with no settings
-        this.metadataManager.updateSyncStatus(jobType, "conflict");
-        this.metadataManager.completeSyncJob(jobId, false, "No settings found");
         return console.log("No settings found.");
       }
 
-      writeFileSync(this.outputPath, JSON.stringify(settings, null, 2));
+      // Create a copy of settings and exclude the 'id' field
+      const { id, ...settingsWithoutId } = settings;
 
-      // Count the number of settings entries
-      const itemsCount = Object.keys(settings).length;
-
-      // Track the number of items exported
-      this.metadataManager.updateItemsCount(jobType, itemsCount);
-
-      // Update sync status to synced
-      this.metadataManager.updateSyncStatus(jobType, "synced", now);
-
-      // Complete the sync job successfully
-      this.metadataManager.completeSyncJob(jobId, true);
+      writeFileSync(
+        this.outputPath,
+        JSON.stringify(settingsWithoutId, null, 2)
+      );
+      await this.auditExport(settingsWithoutId);
 
       console.log(`Settings exported to ${this.outputPath}`);
     } catch (error) {
-      // Update sync status to conflict if there was an error
-      this.metadataManager.updateSyncStatus(jobType, "conflict");
-
-      // Complete the sync job with error
-      this.metadataManager.completeSyncJob(
-        jobId,
-        false,
-        error instanceof Error ? error.message : String(error)
-      );
-
       console.error("Error exporting settings:", error);
       throw error;
     }
   };
+
+  private async auditExport(settings: any) {
+    const settingsSnapshotPath = await this.auditManager.storeSnapshot(
+      "settings",
+      settings
+    );
+    await this.auditManager.log({
+      operation: "export",
+      manager: "SettingsManager",
+      itemType: "settings",
+      status: "success",
+      message: `Exported settings with ${Object.keys(settings).length} fields`,
+      snapshotFile: settingsSnapshotPath,
+    });
+  }
 
   // Check if a role exists by ID
   private async roleExists(roleId: string): Promise<boolean> {
@@ -107,86 +136,38 @@ export class SettingsManager {
     }
   }
 
-  // Define fields that are supported by the SDK
-  private getSdkSupportedFields(): string[] {
-    return [
-      "id",
-      "project_name",
-      "project_url",
-      "project_color",
-      "project_logo",
-      "public_foreground",
-      "public_background",
-      "public_note",
-      "auth_login_attempts",
-      "storage_asset_transform",
-      "storage_asset_presets",
-      "custom_css",
-      "basemaps",
-      "module_bar",
-      "custom_aspect_ratios",
-      "storage_default_folder",
-      "mapbox_key",
-      "project_descriptor",
-      "default_language",
-      "public_favicon",
-      "default_appearance",
-      "default_theme_light",
-      "theme_light_overrides",
-      "default_theme_dark",
-      "theme_dark_overrides",
-      "report_error_url",
-      "report_bug_url",
-      "report_feature_url",
-    ];
+  private async auditImport(dryRun = false) {
+    const localSettings = JSON.parse(readFileSync(this.outputPath, "utf8"));
+    await this.auditManager.auditImportOperation(
+      "settings",
+      "SettingsManager",
+      localSettings,
+      async () => await this.fetchRemoteSettings(),
+      async () => {
+        await this.handleImportSettings();
+        return {
+          status: "success",
+          message: "Settings imported successfully.",
+        };
+      },
+      dryRun
+    );
   }
 
-  // Define fields that might cause foreign key constraints
-  private getForeignKeyFields(): string[] {
-    return [
-      "project_logo",
-      "public_foreground",
-      "public_background",
-      "storage_default_folder",
-      "public_favicon",
-    ];
-  }
+  importSettings = async (dryRun = false) => {
+    await this.auditImport(dryRun);
+    if (!dryRun) {
+      console.log("Settings import completed successfully.");
+    } else {
+      console.log("[Dry Run] Import preview complete. No changes applied.");
+    }
+  };
 
-  // Define additional fields supported by the API but not in the SDK types
-  private getUnsupportedFields(): string[] {
-    return [
-      "public_registration",
-      "public_registration_role",
-      "public_registration_verify_email",
-      "public_registration_email_filter",
-      "visual_editor_urls",
-    ];
-  }
-
-  importSettings = async () => {
-    // Create a new sync job
-    const jobId = uuidv4();
-    const jobType: ConfigType = "settings";
-    const now = new Date().toISOString();
-
-    this.metadataManager.addSyncJob({
-      id: jobId,
-      type: jobType,
-      direction: "import",
-      status: "running",
-      createdAt: now,
-    });
-
+  private async handleImportSettings() {
     try {
       console.log("Importing settings...");
       const destinationSettings = await client.request(readSettings());
       if (destinationSettings.id === null) {
-        this.metadataManager.updateSyncStatus(jobType, "conflict");
-        this.metadataManager.completeSyncJob(
-          jobId,
-          false,
-          "Settings have not been initialized yet"
-        );
         return console.warn(
           "Settings have not been initialized yet. Save settings in the Directus admin panel first."
         );
@@ -197,10 +178,7 @@ export class SettingsManager {
 
       // Check for references that might cause foreign key constraints
       // Get field lists
-      const supportedFields = this.getSdkSupportedFields();
-      const foreignKeyFields = this.getForeignKeyFields();
-      const unsupportedFields = this.getUnsupportedFields();
-      const validFields = [...supportedFields, ...unsupportedFields];
+      const validFields = [...SDK_SUPPORTED_FIELDS, ...UNSUPPORTED_FIELDS];
 
       // Filter and validate settings
       const safeSettings: Record<string, any> = {};
@@ -215,9 +193,9 @@ export class SettingsManager {
           return;
         }
 
-        if (unsupportedFields.includes(key)) {
+        if (UNSUPPORTED_FIELDS.includes(key)) {
           extendedSettings[key] = value;
-        } else if (foreignKeyFields.includes(key)) {
+        } else if (FOREIGN_KEY_FIELDS.includes(key)) {
           foreignKeySettings[key] = value;
         } else {
           safeSettings[key] = value;
@@ -351,31 +329,21 @@ export class SettingsManager {
           console.warn(`Failed to update extended fields: ${error.message}`);
         }
       }
-
-      // Count the number of settings entries
-      const itemsCount = Object.keys(settings).length;
-
-      // Track the number of items imported
-      this.metadataManager.updateItemsCount(jobType, itemsCount);
-
-      // Update sync status to synced
-      this.metadataManager.updateSyncStatus(jobType, "synced", now);
-
-      // Complete the sync job successfully
-      this.metadataManager.completeSyncJob(jobId, true);
-
-      console.log("Settings import completed successfully.");
     } catch (error: any) {
-      this.metadataManager.updateSyncStatus(jobType, "conflict");
-
-      this.metadataManager.completeSyncJob(
-        jobId,
-        false,
-        error instanceof Error ? error.message : String(error)
-      );
-
       console.error("Settings import failed:", error.message || error);
       throw error;
     }
-  };
+  }
+
+  normalizeSettings(settings: any) {
+    // Create a copy of settings and remove id
+    const { id, user_created, ...normalizedSettings } = settings;
+
+    return normalizedSettings;
+  }
+
+  private async fetchRemoteSettings() {
+    const settings = await client.request(readSettings());
+    return this.normalizeSettings(settings);
+  }
 }

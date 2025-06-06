@@ -8,12 +8,11 @@ import { RolesManager } from "./roles";
 import { SettingsManager } from "./settings";
 import { FilesManager } from "./files";
 import { SchemaManager } from "./schema";
-import { SnapshotManager } from "./snapshot";
 import { printConfig, client } from "./helper";
 import { readMe } from "@directus/sdk";
 import checkEnvironment from "./utils/checkEnv";
-
-type ConfigType = "flows" | "roles" | "settings" | "files" | "schema";
+import { AuditManager } from "./audit";
+import { ConfigType } from "./types/generic";
 
 interface BaseManager {
   exportFlows?: () => Promise<void>;
@@ -21,11 +20,11 @@ interface BaseManager {
   exportSettings?: () => Promise<void>;
   exportFiles?: () => Promise<void>;
   exportSchema?: () => Promise<void>;
-  importFlows?: () => Promise<void>;
-  importRoles?: () => Promise<void>;
-  importSettings?: () => Promise<void>;
-  importFiles?: () => Promise<void>;
-  importSchema?: () => Promise<void>;
+  importFlows?: (dryRun?: boolean) => Promise<void>;
+  importRoles?: (dryRun?: boolean) => Promise<void>;
+  importSettings?: (dryRun?: boolean) => Promise<void>;
+  importFiles?: (dryRun?: boolean) => Promise<void>;
+  importSchema?: (dryRun?: boolean) => Promise<void>;
 }
 
 const managers: Record<ConfigType, BaseManager> = {
@@ -36,8 +35,7 @@ const managers: Record<ConfigType, BaseManager> = {
   schema: new SchemaManager(),
 };
 
-// Add snapshot manager separately as it's not part of the regular import/export cycle
-const snapshotManager = new SnapshotManager();
+const auditManager = new AuditManager();
 
 const supportedTypes = Object.keys(managers) as ConfigType[];
 
@@ -90,7 +88,8 @@ program
   .command("import")
   .description("Import configuration")
   .argument("<type>", "Type of configuration to import", validateType)
-  .action(async (type: ConfigType) => {
+  .option("--dry-run", "Preview changes without applying them")
+  .action(async (type: ConfigType, options) => {
     try {
       const manager = managers[type];
       const importMethod =
@@ -101,7 +100,7 @@ program
         ];
 
       if (typeof importMethod === "function") {
-        await importMethod();
+        await (importMethod as any)(options.dryRun);
       } else {
         throw new Error(`Import not implemented for type: ${type}`);
       }
@@ -219,69 +218,69 @@ program
     }
   });
 
-// Add snapshot commands
-const snapshotCommand = program
-  .command("snapshot")
-  .description("Create and manage snapshots of Directus instance state");
+const auditCommand = program
+  .command("audit")
+  .description("Audit and diff configuration snapshots");
 
-snapshotCommand
-  .command("create")
-  .description("Create a snapshot of the current Directus instance state")
-  .action(async () => {
-    try {
-      await snapshotManager.createSnapshot();
-    } catch (error) {
-      console.error("Snapshot creation failed:", error);
-      process.exit(1);
+auditCommand
+  .command("list <type>")
+  .description("List all snapshots for a config type")
+  .action(async (type: string) => {
+    const snapshots = await auditManager.getSnapshots(type);
+    if (snapshots.length === 0) {
+      console.log(`No snapshots found for type: ${type}`);
+      return;
     }
+    console.log(`Snapshots for ${type}:`);
+    snapshots.forEach((snap, idx) => {
+      console.log(`${idx + 1}. ${snap.id}`);
+    });
   });
 
-snapshotCommand
-  .command("compare")
-  .description("Compare snapshot with configuration files")
-  .action(async () => {
-    try {
-      await snapshotManager.compareWithConfig();
-    } catch (error) {
-      console.error("Snapshot comparison failed:", error);
+auditCommand
+  .command("diff <type> <idx1> <idx2>")
+  .description("Show a diff between two snapshots by index (see 'audit list')")
+  .action(async (type: string, idx1: string, idx2: string) => {
+    const snapshots = await auditManager.getSnapshots(type);
+    const i1 = parseInt(idx1, 10) - 1;
+    const i2 = parseInt(idx2, 10) - 1;
+    if (
+      isNaN(i1) ||
+      isNaN(i2) ||
+      i1 < 0 ||
+      i2 < 0 ||
+      i1 >= snapshots.length ||
+      i2 >= snapshots.length
+    ) {
+      console.error("Invalid snapshot indices.");
       process.exit(1);
     }
+    const diff = await auditManager.diffSnapshots(
+      snapshots[i1].path,
+      snapshots[i2].path
+    );
+    console.log(diff);
   });
 
-snapshotCommand
-  .command("roles")
-  .description("Check role identities between environments")
-  .action(async () => {
-    try {
-      await snapshotManager.checkRoleIdentities();
-    } catch (error) {
-      console.error("Role identity check failed:", error);
-      process.exit(1);
-    }
+auditCommand
+  .command("timemachine <type>")
+  .description(
+    "Show a time machine diff for a config type (all consecutive diffs)"
+  )
+  .option("--limit <n>", "Limit to last N diffs", parseInt)
+  .option("--start-time <iso>", "Only show diffs after this ISO date/time")
+  .action(async (type: string, options) => {
+    await auditManager.printTimeMachineDiff(type, {
+      limit: options.limit,
+      startTime: options.startTime,
+    });
   });
 
-snapshotCommand
-  .command("policies")
-  .description("Check public policy identities between environments")
-  .action(async () => {
-    try {
-      await snapshotManager.checkPublicPolicyIdentities();
-    } catch (error) {
-      console.error("Public policy identity check failed:", error);
-      process.exit(1);
-    }
-  });
-
-program
-  .command("validate")
-  .description("Validate configuration files for potential import issues")
-  .action(async () => {
-    try {
-      await snapshotManager.findDuplicateIds();
-    } catch (error) {
-      console.error("Validation failed:", error);
-      process.exit(1);
-    }
+auditCommand
+  .command("import-diffs <type>")
+  .description("Show latest import diff for a config type (preview vs actual)")
+  .action(async (type: string) => {
+    await auditManager.printImportDiffs(type);
   });
 
 program
@@ -296,9 +295,7 @@ program
 
       // First test the connection without auth
       try {
-        const response = await fetch(
-          `${process.env.DIRECTUS_CT_URL}/server/ping`
-        );
+        const response = await fetch(`${process.env.DCT_API_URL}/server/ping`);
         if (response.ok) {
           console.log("✅ Connection successful");
         } else {
@@ -339,9 +336,7 @@ program
         );
         console.log("- File should be in the current working directory");
         console.log("- File should be named .env");
-        console.log(
-          "- Variables should be in format: DIRECTUS_CT_TOKEN=your_token"
-        );
+        console.log("- Variables should be in format: DCT_TOKEN=your_token");
       }
     } catch (error) {
       console.error("Debug check failed:", error);

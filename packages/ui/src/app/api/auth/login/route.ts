@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import axios from "axios";
 
-const API_URL = process.env.DIRECTUS_CT_URL || "http://localhost:8055";
+const API_URL = process.env.DCT_API_URL || "http://localhost:8055";
 
 export async function POST(request: NextRequest) {
   try {

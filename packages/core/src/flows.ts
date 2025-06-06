@@ -11,8 +11,7 @@ import { writeFileSync, readFileSync } from "fs";
 import { join } from "path";
 import { client, CONFIG_PATH, ensureConfigDirs } from "./helper";
 import _ from "lodash";
-import { MetadataManager, ConfigType } from "./metadata";
-import { v4 as uuidv4 } from "uuid";
+import { AuditManager } from "./audit";
 
 interface DirectusOperation {
   id: string;
@@ -27,11 +26,9 @@ interface DirectusOperation {
 export class FlowsManager {
   private flowPath: string = join(CONFIG_PATH, "flows.json");
   private operationPath: string = join(CONFIG_PATH, "operations.json");
-  private metadataManager: MetadataManager;
+  private auditManager: AuditManager = new AuditManager();
 
-  constructor() {
-    this.metadataManager = new MetadataManager();
-  }
+  constructor() {}
 
   setUserNull(record: Record<string, any>) {
     if (record["user_created"]) {
@@ -47,21 +44,45 @@ export class FlowsManager {
     return record;
   }
 
+  normalizeFlow(flow: any) {
+    // Nullify user_created and empty operations for consistency
+    return this.emptyOperations(this.setUserNull({ ...flow }));
+  }
+
+  normalizeOperation(operation: any) {
+    // Nullify user_created for consistency
+    return this.setUserNull({ ...operation });
+  }
+
+  private async auditExport(flows: any[], operations: any[]) {
+    const flowsSnapshotPath = await this.auditManager.storeSnapshot(
+      "flows",
+      flows
+    );
+    const operationsSnapshotPath = await this.auditManager.storeSnapshot(
+      "operations",
+      operations
+    );
+    await this.auditManager.log({
+      operation: "export",
+      manager: "FlowsManager",
+      itemType: "flows",
+      status: "success",
+      message: `Exported ${flows.length} flows and ${operations.length} operations`,
+      snapshotFile: flowsSnapshotPath,
+    });
+    await this.auditManager.log({
+      operation: "export",
+      manager: "FlowsManager",
+      itemType: "operations",
+      status: "success",
+      message: `Exported ${operations.length} operations`,
+      snapshotFile: operationsSnapshotPath,
+    });
+  }
+
   exportFlows = async () => {
     ensureConfigDirs();
-
-    // Create a new sync job
-    const jobId = uuidv4();
-    const jobType: ConfigType = "flows";
-    const now = new Date().toISOString();
-
-    this.metadataManager.addSyncJob({
-      id: jobId,
-      type: jobType,
-      direction: "export",
-      status: "running",
-      createdAt: now,
-    });
 
     try {
       // flows are tied to operations, so we need to fetch all operations
@@ -82,15 +103,7 @@ export class FlowsManager {
         )
       );
 
-      // Track the number of items exported
-      const totalItems = operations.length + flows.length;
-      this.metadataManager.updateItemsCount(jobType, totalItems);
-
-      // Update sync status to synced
-      this.metadataManager.updateSyncStatus(jobType, "synced", now);
-
-      // Complete the sync job successfully
-      this.metadataManager.completeSyncJob(jobId, true);
+      await this.auditExport(flows, operations);
 
       console.log(`Flows exported to ${this.flowPath}`);
       console.log(`Operations exported to ${this.operationPath}`);
@@ -98,59 +111,47 @@ export class FlowsManager {
         `Exported ${flows.length} flows and ${operations.length} operations`
       );
     } catch (error) {
-      // Update sync status to conflict if there was an error
-      this.metadataManager.updateSyncStatus(jobType, "conflict");
-
-      // Complete the sync job with error
-      this.metadataManager.completeSyncJob(
-        jobId,
-        false,
-        error instanceof Error ? error.message : String(error)
-      );
-
       console.error("Error exporting flows:", error);
       throw error;
     }
   };
 
-  importFlows = async () => {
-    // Create a new sync job
-    const jobId = uuidv4();
-    const jobType: ConfigType = "flows";
-    const now = new Date().toISOString();
+  private async fetchRemoteFlowsAndOperations() {
+    let flows = await client.request(readFlows());
+    let operations = await client.request(readOperations());
+    flows = flows.map((flow) => this.normalizeFlow(flow));
+    operations = operations.map((op) => this.normalizeOperation(op));
+    return { flows, operations };
+  }
 
-    this.metadataManager.addSyncJob({
-      id: jobId,
-      type: jobType,
-      direction: "import",
-      status: "running",
-      createdAt: now,
-    });
+  private async auditImport(dryRun = false) {
+    const localFlows = JSON.parse(readFileSync(this.flowPath, "utf8"));
+    const localOperations = JSON.parse(
+      readFileSync(this.operationPath, "utf8")
+    );
+    await this.auditManager.auditImportOperation(
+      "flows",
+      "FlowsManager",
+      { flows: localFlows, operations: localOperations },
+      async () => await this.fetchRemoteFlowsAndOperations(),
+      async () => {
+        await this.handleImportFlows();
+        await this.handleImportOperations();
+        return {
+          status: "success",
+          message: "Flows and operations imported successfully.",
+        };
+      },
+      dryRun
+    );
+  }
 
-    try {
-      await this.handleImportFlows();
-      await this.handleImportOperations();
-
-      // Update sync status to synced
-      this.metadataManager.updateSyncStatus(jobType, "synced", now);
-
-      // Complete the sync job successfully
-      this.metadataManager.completeSyncJob(jobId, true);
-
+  importFlows = async (dryRun = false) => {
+    await this.auditImport(dryRun);
+    if (!dryRun) {
       console.log("Flows and operations imported successfully.");
-    } catch (error) {
-      // Update sync status to conflict if there was an error
-      this.metadataManager.updateSyncStatus(jobType, "conflict");
-
-      // Complete the sync job with error
-      this.metadataManager.completeSyncJob(
-        jobId,
-        false,
-        error instanceof Error ? error.message : String(error)
-      );
-
-      console.error("Error importing flows:", error);
-      throw error;
+    } else {
+      console.log("[Dry Run] Import preview complete. No changes applied.");
     }
   };
 
@@ -230,11 +231,7 @@ export class FlowsManager {
       throw error;
     }
 
-    // Update the item count after import
-    const totalItems =
-      incomingOperations.length +
-      JSON.parse(readFileSync(this.flowPath, "utf8")).length;
-    this.metadataManager.updateItemsCount("flows", totalItems);
+    // (MetadataManager removed from import logic)
   }
 
   private sortOperationsByDependency(

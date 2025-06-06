@@ -18,11 +18,9 @@ import {
 } from "./helper";
 import _ from "lodash";
 import FormData from "form-data";
-import { MetadataManager } from "./metadata";
 import { v4 as uuidv4 } from "uuid";
-
-// Import ConfigType from the same place it's defined in flows.ts
-type ConfigType = "flows" | "roles" | "settings" | "files" | "schema";
+import { AuditManager } from "./audit";
+import { ConfigType } from "./types/generic";
 
 export class FilesManager {
   private filePath: string = join(CONFIG_PATH, "files.json");
@@ -30,11 +28,7 @@ export class FilesManager {
   private assetPath: string = join(CONFIG_PATH, "assets");
   private immutableFields = ["filename_disk", "filename_download"];
   private backupField: string | null = null;
-  private metadataManager: MetadataManager;
-
-  constructor() {
-    this.metadataManager = new MetadataManager();
-  }
+  private auditManager: AuditManager = new AuditManager();
 
   public getBackupField = async (
     collection: "directus_files" | "directus_folders"
@@ -50,14 +44,28 @@ export class FilesManager {
     return this.backupField ? { [this.backupField]: { _eq: true } } : {};
   };
 
-  private untrackIgnoredFields = (record: Record<string, any>) => {
-    const baseFields = ["id", "title", "type", "folder"];
-
-    return _.pick(record, [
-      ...baseFields,
-      ...(this.backupField ? [this.backupField] : []),
-      ...this.immutableFields,
-    ]);
+  private untrackIgnoredFields = (
+    record: Record<string, any>,
+    type: "file" | "folder" = "file",
+    backupFieldOverride?: string
+  ) => {
+    if (type === "folder") {
+      // Always include id, name, parent, and backupField if present (from override or instance)
+      const baseFields = ["id", "name", "parent"];
+      const backupField = backupFieldOverride || this.backupField || undefined;
+      return _.pick(record, [
+        ...baseFields,
+        ...(backupField ? [backupField] : []),
+      ]);
+    } else {
+      // For files, use the original logic
+      const baseFields = ["id", "title", "type", "folder"];
+      return _.pick(record, [
+        ...baseFields,
+        ...(this.backupField ? [this.backupField] : []),
+        ...this.immutableFields,
+      ]);
+    }
   };
 
   private async handleFieldPermissionError(error: any, context: string) {
@@ -151,7 +159,7 @@ export class FilesManager {
     // Create a map of existing files by ID for faster lookups
     const existingFileMap = new Map();
     destinationFiles
-      .map(this.untrackIgnoredFields)
+      .map((item) => this.untrackIgnoredFields(item))
       .forEach((file) => existingFileMap.set(file.id, file));
 
     console.log(`Importing ${sourceFiles.length} files...`);
@@ -373,27 +381,79 @@ export class FilesManager {
     }
   }
 
+  normalizeFile(file: any) {
+    const f = { ...file };
+    if (f["user_created"]) f["user_created"] = null;
+    return f;
+  }
+
+  normalizeFolder(folder: any) {
+    const f = { ...folder };
+    if (f["user_created"]) f["user_created"] = null;
+    return f;
+  }
+
+  private async fetchRemoteFilesAndFolders() {
+    // Fetch files and folders using the same filtering logic as export
+    // to avoid pulling thousands of irrelevant items
+
+    // First, get the backup field for folders
+    await this.getBackupField("directus_folders");
+    const folders = await this.getRemoteFolders();
+
+    // Then, get the backup field for files and fetch only marked files
+    await this.getBackupField("directus_files");
+    let files: Record<string, any>[] = [];
+    try {
+      files = await client.request(
+        readFiles({
+          filter: this.getBackupFilter(),
+          fields: ["*"], // Ensure all fields are returned for filtering
+        })
+      );
+
+      // Double-check backup flag in case filter didn't work
+      if (this.backupField && files.length > 0) {
+        files = files.filter(
+          (file) =>
+            file.hasOwnProperty(this.backupField!) &&
+            file[this.backupField!] === true
+        );
+      }
+    } catch (error) {
+      files = await this.handleFieldPermissionError(
+        error,
+        "Error reading files with backup filter"
+      );
+    }
+
+    // Normalize the results
+    const normalizedFiles = Array.isArray(files)
+      ? files.map((f) => this.normalizeFile(f))
+      : [];
+    const normalizedFolders = Array.isArray(folders)
+      ? folders.map((f) => this.normalizeFolder(f))
+      : [];
+
+    return { files: normalizedFiles, folders: normalizedFolders };
+  }
+
   exportFiles = async () => {
     ensureConfigDirs();
-
-    // Create a new sync job
-    const jobId = uuidv4();
-    const jobType: ConfigType = "files";
-    const now = new Date().toISOString();
-
-    this.metadataManager.addSyncJob({
-      id: jobId,
-      type: jobType,
-      direction: "export",
-      status: "running",
-      createdAt: now,
-    });
-
     try {
       // backup folders first - only those with should backup set to true
       await this.getBackupField("directus_folders");
       const folders = await this.getRemoteFolders();
-      writeFileSync(this.folderPath, JSON.stringify(folders, null, 2));
+      writeFileSync(
+        this.folderPath,
+        JSON.stringify(
+          folders.map((f) =>
+            this.untrackIgnoredFields(this.normalizeFolder(f), "folder")
+          ),
+          null,
+          2
+        )
+      );
 
       // backup files next - only those with should backup set to true
       await this.getBackupField("directus_files");
@@ -423,96 +483,152 @@ export class FilesManager {
 
       writeFileSync(
         this.filePath,
-        JSON.stringify(files.map(this.untrackIgnoredFields), null, 2)
+        JSON.stringify(
+          files.map((f) =>
+            this.untrackIgnoredFields(this.normalizeFile(f), "file")
+          ),
+          null,
+          2
+        )
       );
 
       // Download and backup files concurrently with retries
       const downloadPromises = files.map((file) => downloadFile(file));
       await Promise.all(downloadPromises);
 
-      // Count the total number of items exported
-      const totalItems = folders.length + files.length;
-
-      // Track the number of items exported
-      this.metadataManager.updateItemsCount(jobType, totalItems);
-
-      // Update sync status to synced
-      this.metadataManager.updateSyncStatus(jobType, "synced", now);
-
-      // Complete the sync job successfully
-      this.metadataManager.completeSyncJob(jobId, true);
-
+      await this.auditExport(files, folders);
       console.log(`Files exported to ${this.filePath}`);
       console.log(`Folders exported to ${this.folderPath}`);
-      console.log(`Assets exported to ${this.assetPath}`);
-    } catch (error) {
-      // Update sync status to conflict if there was an error
-      this.metadataManager.updateSyncStatus(jobType, "conflict");
-
-      // Complete the sync job with error
-      this.metadataManager.completeSyncJob(
-        jobId,
-        false,
-        error instanceof Error ? error.message : String(error)
+      console.log(
+        `Exported ${files.length} files and ${folders.length} folders`
       );
-
+    } catch (error) {
       console.error("Error exporting files:", error);
       throw error;
     }
   };
 
-  importFiles = async () => {
-    // Create a new sync job
-    const jobId = uuidv4();
-    const jobType: ConfigType = "files";
-    const now = new Date().toISOString();
-
-    this.metadataManager.addSyncJob({
-      id: jobId,
-      type: jobType,
-      direction: "import",
-      status: "running",
-      createdAt: now,
+  private async auditExport(files: any[], folders: any[]) {
+    // Apply the same normalization and field picking as exportFiles
+    const normalizedFiles = Array.isArray(files)
+      ? files.map((f) =>
+          this.untrackIgnoredFields(this.normalizeFile(f), "file")
+        )
+      : [];
+    const normalizedFolders = Array.isArray(folders)
+      ? folders.map((f) =>
+          this.untrackIgnoredFields(this.normalizeFolder(f), "folder")
+        )
+      : [];
+    const filesSnapshotPath = await this.auditManager.storeSnapshot(
+      "files",
+      normalizedFiles
+    );
+    const foldersSnapshotPath = await this.auditManager.storeSnapshot(
+      "folders",
+      normalizedFolders
+    );
+    await this.auditManager.log({
+      operation: "export",
+      manager: "FilesManager",
+      itemType: "files",
+      status: "success",
+      message: `Exported ${normalizedFiles.length} files and ${normalizedFolders.length} folders`,
+      snapshotFile: filesSnapshotPath,
     });
+    await this.auditManager.log({
+      operation: "export",
+      manager: "FilesManager",
+      itemType: "folders",
+      status: "success",
+      message: `Exported ${normalizedFolders.length} folders`,
+      snapshotFile: foldersSnapshotPath,
+    });
+  }
 
-    try {
-      // import folders first
-      await this.getBackupField("directus_folders");
-      await this.handleImportFolders();
-      console.log("Folders imported successfully.");
-
-      // import files next
-      await this.getBackupField("directus_files");
-      await this.handleImportFiles();
-
-      // Count the total number of items imported
-      const folders = JSON.parse(readFileSync(this.folderPath, "utf8")).length;
-      const files = JSON.parse(readFileSync(this.filePath, "utf8")).length;
-      const totalItems = folders + files;
-
-      // Track the number of items imported
-      this.metadataManager.updateItemsCount(jobType, totalItems);
-
-      // Update sync status to synced
-      this.metadataManager.updateSyncStatus(jobType, "synced", now);
-
-      // Complete the sync job successfully
-      this.metadataManager.completeSyncJob(jobId, true);
-
-      console.log("Files imported successfully.");
-    } catch (error) {
-      // Update sync status to conflict if there was an error
-      this.metadataManager.updateSyncStatus(jobType, "conflict");
-
-      // Complete the sync job with error
-      this.metadataManager.completeSyncJob(
-        jobId,
-        false,
-        error instanceof Error ? error.message : String(error)
-      );
-
-      console.error("Error importing files:", error);
-      throw error;
+  importFiles = async (dryRun: boolean = false) => {
+    await this.auditImport(dryRun);
+    if (!dryRun) {
+      console.log("Files and folders imported successfully.");
+    } else {
+      console.log("[Dry Run] Import preview complete. No changes applied.");
     }
   };
+
+  private async auditImport(dryRun = false) {
+    // Determine the backup field for folders from the config or snapshot
+    await this.getBackupField("directus_folders");
+    const backupField = this.backupField || undefined;
+    // Normalize local files and folders to match export shape for true comparison
+    let localFilesRaw = JSON.parse(readFileSync(this.filePath, "utf8"));
+    let localFoldersRaw = JSON.parse(readFileSync(this.folderPath, "utf8"));
+    // Apply normalization and pick only tracked fields
+    const localFiles = Array.isArray(localFilesRaw)
+      ? localFilesRaw.map((f) =>
+          this.untrackIgnoredFields(this.normalizeFile(f), "file")
+        )
+      : [];
+    const localFolders = Array.isArray(localFoldersRaw)
+      ? localFoldersRaw.map((f) =>
+          this.untrackIgnoredFields(
+            this.normalizeFolder(f),
+            "folder",
+            backupField
+          )
+        )
+      : [];
+    // Wrap remote fetch to normalize remote snapshots for like-for-like comparison
+    const fetchAndNormalizeRemote = async () => {
+      const remote = await this.fetchRemoteFilesAndFolders();
+      return {
+        files: Array.isArray(remote.files)
+          ? remote.files.map((f) =>
+              this.untrackIgnoredFields(this.normalizeFile(f), "file")
+            )
+          : [],
+        folders: Array.isArray(remote.folders)
+          ? remote.folders.map((f) =>
+              this.untrackIgnoredFields(
+                this.normalizeFolder(f),
+                "folder",
+                backupField
+              )
+            )
+          : [],
+      };
+    };
+    await this.auditManager.auditImportOperation(
+      "files",
+      "FilesManager",
+      { files: localFiles, folders: localFolders },
+      fetchAndNormalizeRemote,
+      async () => {
+        // import folders first
+        await this.getBackupField("directus_folders");
+        await this.handleImportFolders();
+        // import files next
+        await this.getBackupField("directus_files");
+        await this.handleImportFiles();
+        // Count the total number of items imported
+        const folders = JSON.parse(
+          readFileSync(this.folderPath, "utf8")
+        ).length;
+        const files = JSON.parse(readFileSync(this.filePath, "utf8")).length;
+        const totalItems = folders + files;
+        // Track the number of items imported
+        await this.auditManager.log({
+          operation: "import",
+          manager: "FilesManager",
+          itemType: "files",
+          status: "success",
+          message: `Imported ${totalItems} items (Files: ${files}, Folders: ${folders})`,
+        });
+        return {
+          status: "success",
+          message: "Files and folders imported successfully.",
+        };
+      },
+      dryRun
+    );
+  }
 }

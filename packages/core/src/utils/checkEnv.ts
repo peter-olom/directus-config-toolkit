@@ -23,26 +23,26 @@ export default async function checkEnvironment(): Promise<void> {
 
       console.log("\nEnvironment Variables in .env:");
       for (const [key, value] of Object.entries(parsedEnv)) {
-        if (key === "DIRECTUS_CT_TOKEN") {
+        if (key === "DCT_TOKEN") {
           console.log(
-            `DIRECTUS_CT_TOKEN: ${value.substring(0, 4)}...${value.substring(
+            `DCT_TOKEN: ${value.substring(0, 4)}...${value.substring(
               value.length - 4
             )}`
           );
         } else if (
-          key === "DIRECTUS_CT_URL" ||
-          key === "DIRECTUS_CT_CONFIG_PATH"
+          key === "DCT_API_URL" ||
+          key === "DCT_CONFIG_PATH"
         ) {
           console.log(`${key}: ${value}`);
         }
       }
 
       // Check for required variables
-      if (!parsedEnv.DIRECTUS_CT_URL) {
-        console.log("❌ DIRECTUS_CT_URL is missing in .env file");
+      if (!parsedEnv.DCT_API_URL) {
+        console.log("❌ DCT_API_URL is missing in .env file");
       }
-      if (!parsedEnv.DIRECTUS_CT_TOKEN) {
-        console.log("❌ DIRECTUS_CT_TOKEN is missing in .env file");
+      if (!parsedEnv.DCT_TOKEN) {
+        console.log("❌ DCT_TOKEN is missing in .env file");
       }
     } catch (error: any) {
       console.error(`Error reading .env file: ${error.message}`);
@@ -55,20 +55,20 @@ export default async function checkEnvironment(): Promise<void> {
 
   // Check actual environment variables
   console.log("\nActive Environment Variables:");
-  console.log(`DIRECTUS_CT_URL: ${process.env.DIRECTUS_CT_URL || "(not set)"}`);
+  console.log(`DCT_API_URL: ${process.env.DCT_API_URL || "(not set)"}`);
   console.log(
-    `DIRECTUS_CT_TOKEN: ${
-      process.env.DIRECTUS_CT_TOKEN ? "(set)" : "(not set)"
+    `DCT_TOKEN: ${
+      process.env.DCT_TOKEN ? "(set)" : "(not set)"
     }`
   );
   console.log(
-    `DIRECTUS_CT_CONFIG_PATH: ${
-      process.env.DIRECTUS_CT_CONFIG_PATH || "(not set)"
+    `DCT_CONFIG_PATH: ${
+      process.env.DCT_CONFIG_PATH || "(not set)"
     }`
   );
 
   // Test connection
-  const apiUrl = process.env.DIRECTUS_CT_URL || "http://localhost:8055";
+  const apiUrl = process.env.DCT_API_URL || "http://localhost:8055";
   console.log(`\nTesting connection to ${apiUrl}...`);
 
   try {
@@ -76,11 +76,11 @@ export default async function checkEnvironment(): Promise<void> {
     console.log("✅ Server is reachable");
 
     // Test authentication
-    if (process.env.DIRECTUS_CT_TOKEN) {
+    if (process.env.DCT_TOKEN) {
       try {
         await axios.get(`${apiUrl}/users/me`, {
           headers: {
-            Authorization: `Bearer ${process.env.DIRECTUS_CT_TOKEN}`,
+            Authorization: `Bearer ${process.env.DCT_TOKEN}`,
           },
           timeout: 5000,
         });
@@ -91,7 +91,7 @@ export default async function checkEnvironment(): Promise<void> {
         console.log(`Message: ${error.message || "Unknown error"}`);
       }
     } else {
-      console.log("⚠️ Cannot test authentication without DIRECTUS_CT_TOKEN");
+      console.log("⚠️ Cannot test authentication without DCT_TOKEN");
     }
   } catch (error: any) {
     console.log("❌ Server is not reachable");
@@ -106,6 +106,6 @@ export default async function checkEnvironment(): Promise<void> {
   );
   console.log("4. Try running with explicit environment variables:");
   console.log(
-    "   DIRECTUS_CT_URL=http://localhost:8055 DIRECTUS_CT_TOKEN=your_token npx directus-ct export roles"
+    "   DCT_API_URL=http://localhost:8055 DCT_TOKEN=your_token npx directus-ct export roles"
   );
 }

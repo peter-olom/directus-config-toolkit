@@ -81,8 +81,8 @@ Run the container:
 
 ```bash
 docker run -p 3001:3001 \
-  -e DIRECTUS_CT_URL=http://your-directus-url \
-  -e DIRECTUS_CT_TOKEN=your_token \
+  -e DCT_API_URL=http://your-directus-url \
+  -e DCT_TOKEN=your_token \
   -v /path/to/config:/app/config \
   directus-config-toolkit dashboard
 ```
@@ -91,10 +91,10 @@ docker run -p 3001:3001 \
 
 Remember to set these environment variables:
 
-- `DIRECTUS_CT_URL`: Your Directus instance URL
-- `DIRECTUS_CT_TOKEN`: Your Directus API token
-- `DIRECTUS_CT_CONFIG_PATH`: Path to store configuration files
-- `DIRECTUS_CT_API_PORT`: API server port (default: 3001)
+- `DCT_API_URL`: Your Directus instance URL
+- `DCT_TOKEN`: Your Directus API token
+- `DCT_CONFIG_PATH`: Path to store configuration files
+- `DCT_API_PORT`: API server port (default: 3001)
 
 ## Testing the API
 

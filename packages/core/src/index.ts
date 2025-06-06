@@ -6,5 +6,4 @@ export { RolesManager } from "./roles";
 export { SettingsManager } from "./settings";
 export { FilesManager } from "./files";
 export { SchemaManager } from "./schema";
-export { MetadataManager } from "./metadata";
-export { SnapshotManager } from "./snapshot";
+export { AuditManager } from "./audit";

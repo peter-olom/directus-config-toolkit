@@ -3,10 +3,10 @@ import axios from "axios";
 import { createWriteStream, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 
-const API_URL = process.env.DIRECTUS_CT_URL ?? "http://localhost:8055";
-const TOKEN = process.env.DIRECTUS_CT_TOKEN ?? "admin";
+const API_URL = process.env.DCT_API_URL ?? "http://localhost:8055";
+const TOKEN = process.env.DCT_TOKEN ?? "admin";
 
-export const CONFIG_PATH = process.env.DIRECTUS_CT_CONFIG_PATH ?? "./config";
+export const CONFIG_PATH = process.env.DCT_CONFIG_PATH ?? "./config";
 
 export const client = createDirectus(API_URL)
   .with(staticToken(TOKEN))
@@ -140,15 +140,15 @@ export function printConfig() {
 
   // Show environment variables
   console.log("\nEnvironment Variables:");
-  console.log(`DIRECTUS_CT_URL: ${process.env.DIRECTUS_CT_URL || "(not set)"}`);
+  console.log(`DCT_API_URL: ${process.env.DCT_API_URL || "(not set)"}`);
   console.log(
-    `DIRECTUS_CT_TOKEN: ${
-      process.env.DIRECTUS_CT_TOKEN ? "(set)" : "(not set)"
+    `DCT_TOKEN: ${
+      process.env.DCT_TOKEN ? "(set)" : "(not set)"
     }`
   );
   console.log(
-    `DIRECTUS_CT_CONFIG_PATH: ${
-      process.env.DIRECTUS_CT_CONFIG_PATH || "(not set)"
+    `DCT_CONFIG_PATH: ${
+      process.env.DCT_CONFIG_PATH || "(not set)"
     }`
   );
 

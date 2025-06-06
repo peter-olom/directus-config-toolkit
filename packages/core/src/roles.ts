@@ -15,20 +15,15 @@ import {
 } from "@directus/sdk";
 import { writeFileSync, readFileSync } from "fs";
 import { join } from "path";
-import _, { filter } from "lodash";
+import _ from "lodash";
 import {
   callDirectusAPI,
   client,
   CONFIG_PATH,
   ensureConfigDirs,
-  extractErrorMessage,
   retryOperation,
 } from "./helper";
-import { MetadataManager } from "./metadata";
-import { v4 as uuidv4 } from "uuid";
-
-// Import ConfigType from the same place it's defined in flows.ts
-type ConfigType = "flows" | "roles" | "settings" | "files" | "schema";
+import { AuditManager } from "./audit";
 
 /**
  * Find the Public policy in a list of policies
@@ -74,11 +69,9 @@ export class RolesManager {
   private policiesPath: string = join(CONFIG_PATH, "policies.json");
   private accessPath: string = join(CONFIG_PATH, "access.json");
   private permissionsPath: string = join(CONFIG_PATH, "permissions.json");
-  private metadataManager: MetadataManager;
+  private auditManager: AuditManager = new AuditManager();
 
-  constructor() {
-    this.metadataManager = new MetadataManager();
-  }
+  constructor() {}
 
   private emptyPolicies(record: Record<string, any>) {
     if (record["policies"]) {
@@ -200,77 +193,99 @@ export class RolesManager {
     console.log(`Permissions exported to ${this.permissionsPath}`);
   }
 
+  private async auditExport(
+    roles: any[],
+    policies: any[],
+    access: any[],
+    permissions: any[]
+  ) {
+    // Apply the same normalization and field picking as during export
+    const normalizedRoles = Array.isArray(roles)
+      ? this.prepareRoles(roles.map((r) => this.normalizeRole(r)))
+      : [];
+
+    const normalizedPolicies = Array.isArray(policies)
+      ? this.preparePolicies(policies.map((p) => this.normalizePolicy(p)))
+      : [];
+
+    const normalizedAccess = Array.isArray(access)
+      ? this.prepareAccess(access.map((a) => this.normalizeAccess(a)))
+      : [];
+
+    // No need to normalize permissions as they are already normalized during export
+    const normalizedPermissions = Array.isArray(permissions) ? permissions : [];
+
+    const rolesSnapshotPath = await this.auditManager.storeSnapshot(
+      "roles",
+      normalizedRoles
+    );
+    const policiesSnapshotPath = await this.auditManager.storeSnapshot(
+      "policies",
+      normalizedPolicies
+    );
+    const accessSnapshotPath = await this.auditManager.storeSnapshot(
+      "access",
+      normalizedAccess
+    );
+    const permissionsSnapshotPath = await this.auditManager.storeSnapshot(
+      "permissions",
+      normalizedPermissions
+    );
+    await this.auditManager.log({
+      operation: "export",
+      manager: "RolesManager",
+      itemType: "roles",
+      status: "success",
+      message: `Exported ${normalizedRoles.length} roles, ${normalizedPolicies.length} policies, ${normalizedAccess.length} access entries, ${normalizedPermissions.length} permissions`,
+      snapshotFile: rolesSnapshotPath,
+    });
+    await this.auditManager.log({
+      operation: "export",
+      manager: "RolesManager",
+      itemType: "policies",
+      status: "success",
+      message: `Exported ${normalizedPolicies.length} policies`,
+      snapshotFile: policiesSnapshotPath,
+    });
+    await this.auditManager.log({
+      operation: "export",
+      manager: "RolesManager",
+      itemType: "access",
+      status: "success",
+      message: `Exported ${normalizedAccess.length} access entries`,
+      snapshotFile: accessSnapshotPath,
+    });
+    await this.auditManager.log({
+      operation: "export",
+      manager: "RolesManager",
+      itemType: "permissions",
+      status: "success",
+      message: `Exported ${normalizedPermissions.length} permissions`,
+      snapshotFile: permissionsSnapshotPath,
+    });
+  }
+
   exportRoles = async () => {
     ensureConfigDirs();
-
-    // Create a new sync job
-    const jobId = uuidv4();
-    const jobType: ConfigType = "roles";
-    const now = new Date().toISOString();
-
-    this.metadataManager.addSyncJob({
-      id: jobId,
-      type: jobType,
-      direction: "export",
-      status: "running",
-      createdAt: now,
-    });
-
     try {
-      // Get default admin roles that should be excluded
       const defaults = await this.retrieveDefaults();
-
-      // Export roles
       await this.exportRolesData(defaults);
-
-      // Export policies
       await this.exportPoliciesData(defaults);
-
-      // Export access entries
       await this.exportAccessData(defaults);
-
-      // Export permissions
       await this.exportPermissionsData();
-
-      // Count the total number of items exported
-      const roles = JSON.parse(readFileSync(this.rolePath, "utf8")).length;
-      const policies = JSON.parse(
-        readFileSync(this.policiesPath, "utf8")
-      ).length;
-      const access = JSON.parse(readFileSync(this.accessPath, "utf8")).length;
+      const roles = JSON.parse(readFileSync(this.rolePath, "utf8"));
+      const policies = JSON.parse(readFileSync(this.policiesPath, "utf8"));
+      const access = JSON.parse(readFileSync(this.accessPath, "utf8"));
       const permissions = JSON.parse(
         readFileSync(this.permissionsPath, "utf8")
-      ).length;
-
-      const totalItems = roles + policies + access + permissions;
-
-      // Track the number of items exported
-      this.metadataManager.updateItemsCount(jobType, totalItems);
-
-      // Update sync status to synced
-      this.metadataManager.updateSyncStatus(jobType, "synced", now);
-
-      // Complete the sync job successfully
-      this.metadataManager.completeSyncJob(jobId, true);
-
+      );
+      await this.auditExport(roles, policies, access, permissions);
       console.log("Roles export completed successfully");
     } catch (error) {
-      // Update sync status to conflict if there was an error
-      this.metadataManager.updateSyncStatus(jobType, "conflict");
-
-      // Complete the sync job with error
-      this.metadataManager.completeSyncJob(
-        jobId,
-        false,
-        error instanceof Error ? error.message : String(error)
-      );
-
       console.error("Error exporting roles:", error);
       throw error;
     }
   };
-
-  // Using the exported findPublicRole function
 
   /**
    * Handle role mapping specially for roles like Public that may have different IDs
@@ -797,35 +812,200 @@ export class RolesManager {
     );
   }
 
-  private retrieveDefaults = async () => {
-    // start by getting current user (expected to be admin)
-    const user = await client.request(readMe());
+  normalizeRole(role: any) {
+    // Normalize a role for consistent comparison:
+    // 1. Nullify user_created field
+    // 2. Empty nested arrays (policies, permissions, roles)
+    // 3. Remove users array
+    const r = { ...role };
+    if (r["user_created"]) r["user_created"] = null;
+    if (r["policies"]) r["policies"] = [];
+    if (r["permissions"]) r["permissions"] = [];
+    if (r["roles"]) r["roles"] = [];
+    if (r["users"]) delete r["users"]; // Remove users array
+    return r;
+  }
 
-    // get default role
-    const defaultRole = await client.request(readRole(user.role));
+  normalizePolicy(policy: any) {
+    // Normalize a policy for consistent comparison:
+    // 1. Nullify user_created field
+    // 2. Empty nested arrays (roles, permissions)
+    // 3. Remove users array
+    const p = { ...policy };
+    if (p["user_created"]) p["user_created"] = null;
+    if (p["roles"]) p["roles"] = [];
+    if (p["permissions"]) p["permissions"] = [];
+    if (p["users"]) delete p["users"]; // Remove users array
+    return p;
+  }
 
-    // Get all roles
-    const rolesList = await client.request(readRoles());
+  normalizeAccess(access: any) {
+    // Nullify user_created for consistency
+    const a = { ...access };
+    if (a["user_created"]) a["user_created"] = null;
+    return a;
+  }
 
-    // Get admin policies (these have admin_access=true in directus_policies)
-    const adminPolicyList = await client.request(
-      readPolicies({
-        filter: {
-          admin_access: { _eq: true },
-        },
-      })
+  normalizePermission(permission: any) {
+    // Nullify user_created for consistency
+    const p = { ...permission };
+    if (p["user_created"]) p["user_created"] = null;
+    return p;
+  }
+
+  /**
+   * Fetches and filters remote roles, policies, access and permissions data
+   * IMPORTANT: This method applies the same filtering and transformations as the export methods to ensure
+   * that the diff/comparison only shows differences in the data that would actually
+   * be exported. It:
+   *
+   * 1. Excludes admin roles, default policies, and default access entries
+   * 2. Removes IDs from permissions for cross-environment portability
+   * 3. Removes user arrays from roles and policies
+   * 4. Empties nested arrays (permissions, roles, policies) to avoid circular references
+   * 5. Normalizes metadata fields like user_created
+   */
+  private async fetchRemoteRolesAndRelated() {
+    // Get defaults to apply consistent filtering (same as in export methods)
+    const defaults = await this.retrieveDefaults();
+
+    // Get and filter roles the same way as in exportRolesData()
+    const allRoles = await client.request(readRoles());
+    const rolesToExclude = [...defaults.adminRoleIds];
+    if (defaults.defaultRole) {
+      rolesToExclude.push(defaults.defaultRole);
+    }
+    const normalizedRoles = allRoles
+      .filter((r) => !rolesToExclude.includes(r.id))
+      .map((r) => this.normalizeRole(r));
+    // Apply the same preparations as in export to ensure consistency
+    const filteredRoles = this.prepareRoles(normalizedRoles);
+
+    // Get and filter policies the same way as in exportPoliciesData()
+    const allPolicies = await client.request(readPolicies());
+    const normalizedPolicies = allPolicies
+      .filter((p) => !defaults.defaultPolicy.includes(p.id))
+      .map((p) => this.normalizePolicy(p));
+    // Apply the same preparations as in export to ensure consistency
+    const filteredPolicies = this.preparePolicies(normalizedPolicies);
+
+    // Get and filter access the same way as in exportAccessData()
+    const allAccess = await callDirectusAPI<Record<string, any>[]>(
+      "access?filter[user][_null]=true",
+      "GET"
+    );
+    const filteredAccess = Array.isArray(allAccess)
+      ? allAccess
+          .filter((a) => !defaults.defaultAccess.includes(a.id))
+          .map((a) => this.normalizeAccess(a))
+      : [];
+
+    // Get permissions the same way as in exportPermissionsData()
+    const permissions = await this.retrievePermissions();
+
+    return {
+      roles: filteredRoles,
+      policies: filteredPolicies,
+      access: filteredAccess,
+      permissions: permissions,
+    };
+  }
+
+  private async auditImport(dryRun = false) {
+    // Read local data
+    const localRolesRaw = JSON.parse(readFileSync(this.rolePath, "utf8"));
+    const localPoliciesRaw = JSON.parse(
+      readFileSync(this.policiesPath, "utf8")
+    );
+    const localAccessRaw = JSON.parse(readFileSync(this.accessPath, "utf8"));
+    const localPermissionsRaw = JSON.parse(
+      readFileSync(this.permissionsPath, "utf8")
     );
 
-    // Get access entries to map roles to policies
+    // Normalize local data using the same transformations as during export
+    const localRoles = Array.isArray(localRolesRaw)
+      ? this.prepareRoles(localRolesRaw.map((r) => this.normalizeRole(r)))
+      : [];
+
+    const localPolicies = Array.isArray(localPoliciesRaw)
+      ? this.preparePolicies(
+          localPoliciesRaw.map((p) => this.normalizePolicy(p))
+        )
+      : [];
+
+    const localAccess = Array.isArray(localAccessRaw)
+      ? this.prepareAccess(localAccessRaw.map((a) => this.normalizeAccess(a)))
+      : [];
+
+    // No additional normalization needed for permissions
+    const localPermissions = Array.isArray(localPermissionsRaw)
+      ? localPermissionsRaw
+      : [];
+
+    // Create a normalized local data object
+    const normalizedLocalData = {
+      roles: localRoles,
+      policies: localPolicies,
+      access: localAccess,
+      permissions: localPermissions,
+    };
+
+    // Wrap remote fetch to normalize remote data the same way
+    const fetchAndNormalizeRemote = async () => {
+      const remote = await this.fetchRemoteRolesAndRelated();
+      // No additional preparation needed since filtering is now done in fetchRemoteRolesAndRelated
+      return {
+        roles: remote.roles,
+        policies: remote.policies,
+        access: remote.access,
+        permissions: remote.permissions,
+      };
+    };
+
+    await this.auditManager.auditImportOperation(
+      "roles",
+      "RolesManager",
+      normalizedLocalData,
+      fetchAndNormalizeRemote,
+      async () => {
+        await this.handleImportRoles();
+        await this.handleImportPolicies();
+        await this.handleImportAccess();
+        await this.handleImportPermissions();
+        return {
+          status: "success",
+          message:
+            "Roles, policies, access, and permissions imported successfully.",
+        };
+      },
+      dryRun
+    );
+  }
+
+  importRoles = async (dryRun = false) => {
+    await this.auditImport(dryRun);
+    if (!dryRun) {
+      console.log(
+        "Roles, policies, access and permissions imported successfully."
+      );
+    } else {
+      console.log("[Dry Run] Import preview complete. No changes applied.");
+    }
+  };
+
+  // --- Add/restore retrieveDefaults and retrievePermissions as arrow functions ---
+  private retrieveDefaults = async () => {
+    const user = await client.request(readMe());
+    const defaultRole = await client.request(readRole(user.role));
+    const rolesList = await client.request(readRoles());
+    const adminPolicyList = await client.request(
+      readPolicies({ filter: { admin_access: { _eq: true } } })
+    );
     const accessEntries = await callDirectusAPI<Record<string, any>[]>(
       "access?filter[user][_null]=true",
       "GET"
     );
-
-    // Find admin roles by identifying roles associated with admin policies
     let adminRoleIds = new Set<string>();
-
-    // Add roles that have access entries connected to admin policies
     accessEntries.forEach((access) => {
       if (access.role && access.policy) {
         if (adminPolicyList.some((p) => p.id === access.policy)) {
@@ -833,91 +1013,42 @@ export class RolesManager {
         }
       }
     });
-
-    // Add the default role (current user's role) if it's not already included
     adminRoleIds.add(defaultRole.id);
-
-    // Also add roles with "admin" in the name as a fallback
     rolesList.forEach((role) => {
       if (role.name?.toLowerCase().includes("admin")) {
         adminRoleIds.add(role.id);
       }
     });
-
-    // Get the actual admin role objects
     let adminRoles = rolesList.filter((r) => adminRoleIds.has(r.id));
-
-    console.log(
-      `Identified ${adminRoles.length} admin roles by policy associations and naming`
-    );
-
-    // Optional: Log admin roles for visibility
-    if (adminRoles.length > 0) {
-      console.log(
-        `Found ${adminRoles.length} admin role(s) that will be excluded from backup/restore:`,
-        adminRoles.map((r) => `${r.name} (${r.id})`).join(", ")
-      );
-    }
-
-    // get the policies associated with the default role (the api actually returns entities from directus_access as role.policies)
     const defaultAccess = await callDirectusAPI<Record<string, any>[]>(
       `access?filter=${encodeURIComponent(
         JSON.stringify({ id: { _in: defaultRole.policies } })
       )}`,
       "GET"
     );
-
-    // Get system-managed policies (use the existing admin policies list)
     const systemPolicies = await client.request(
-      readPolicies({
-        filter: {
-          name: { _starts_with: "$" },
-        },
-      })
+      readPolicies({ filter: { name: { _starts_with: "$" } } })
     );
-
     const allDefaultPolicies = [
       ...defaultAccess.map((p) => p.policy),
       ...adminPolicyList.map((p) => p.id),
       ...systemPolicies.map((p) => p.id),
     ];
-
-    // Remove duplicates
     const uniqueDefaultPolicies = [...new Set(allDefaultPolicies)];
-
-    // Find Public policy (a system policy with special name $t:public_label)
-    // First try to find the policy directly
     const allPolicies = await client.request(readPolicies());
     const publicPolicy = findPublicPolicy(allPolicies);
-
-    // Also check for Public role as a fallback (for backward compatibility)
     const publicRole = findPublicRole(rolesList);
-
-    if (publicPolicy) {
-      console.log(
-        `Found Public policy: ${publicPolicy.name} (${publicPolicy.id})`
-      );
-    } else if (publicRole) {
-      console.log(`Found Public role: ${publicRole.name} (${publicRole.id})`);
-    } else {
-      console.log("No Public policy or role found in this environment");
-    }
-
     return {
       defaultRole: defaultRole.id,
-      // Store all admin role IDs
       adminRoleIds: adminRoles.map((r) => r.id),
       defaultAccess: defaultAccess.map((p) => p.id),
       defaultPolicy: uniqueDefaultPolicies,
-      // Include public role ID if found
       publicRoleId: publicRole?.id,
-      // Include public policy ID if found
       publicPolicyId: publicPolicy?.id,
     };
   };
 
   private retrievePermissions = async (omitId = true) => {
-    // Use retry operation for better resilience against network issues
     const permissions = await retryOperation(
       async () => {
         return client.request(
@@ -928,122 +1059,7 @@ export class RolesManager {
       1000,
       true
     );
-
     if (omitId === false) return permissions.filter((p) => !!p.id);
     else return permissions.filter((p) => !!p.id).map((p) => _.omit(p, ["id"]));
-  };
-
-  importRoles = async () => {
-    // Create a new sync job
-    const jobId = uuidv4();
-    const jobType: ConfigType = "roles";
-    const now = new Date().toISOString();
-
-    this.metadataManager.addSyncJob({
-      id: jobId,
-      type: jobType,
-      direction: "import",
-      status: "running",
-      createdAt: now,
-    });
-
-    const results = {
-      roles: { success: true, message: "" },
-      policies: { success: true, message: "" },
-      access: { success: true, message: "" },
-      permissions: { success: true, message: "" },
-    };
-
-    try {
-      // Step 1: Import roles
-      await this.handleImportRoles();
-      results.roles.message = "Roles imported successfully";
-    } catch (error: any) {
-      results.roles.success = false;
-      results.roles.message = extractErrorMessage(error);
-      console.error(`Role import failed: ${results.roles.message}`);
-    }
-
-    try {
-      // Step 2: Import policies
-      await this.handleImportPolicies();
-      results.policies.message = "Policies imported successfully";
-    } catch (error: any) {
-      results.policies.success = false;
-      results.policies.message = extractErrorMessage(error);
-      console.error(`Policy import failed: ${results.policies.message}`);
-    }
-
-    try {
-      // Step 3: Import access entries
-      await this.handleImportAccess();
-      results.access.message = "Access entries imported successfully";
-    } catch (error: any) {
-      results.access.success = false;
-      results.access.message = extractErrorMessage(error);
-      console.error(`Access import failed: ${results.access.message}`);
-    }
-
-    try {
-      // Step 4: Import permissions
-      await this.handleImportPermissions();
-      results.permissions.message = "Permissions imported successfully";
-    } catch (error: any) {
-      results.permissions.success = false;
-      results.permissions.message = extractErrorMessage(error);
-      console.error(
-        `Permissions import failed: ${results.permissions.message}`
-      );
-    }
-
-    // Count the total number of items imported
-    const roles = JSON.parse(readFileSync(this.rolePath, "utf8")).length;
-    const policies = JSON.parse(readFileSync(this.policiesPath, "utf8")).length;
-    const access = JSON.parse(readFileSync(this.accessPath, "utf8")).length;
-    const permissions = JSON.parse(
-      readFileSync(this.permissionsPath, "utf8")
-    ).length;
-
-    const totalItems = roles + policies + access + permissions;
-
-    // Track the number of items imported
-    this.metadataManager.updateItemsCount(jobType, totalItems);
-
-    // Print summary
-    console.log("\n=== Role Import Summary ===");
-    let hasFailures = false;
-
-    for (const [type, result] of Object.entries(results)) {
-      if (result.success) {
-        console.log(`✅ ${type}: ${result.message}`);
-      } else {
-        console.log(`❌ ${type}: ${result.message}`);
-        hasFailures = true;
-      }
-    }
-
-    if (hasFailures) {
-      // Update sync status to conflict if there was an error
-      this.metadataManager.updateSyncStatus(jobType, "conflict");
-
-      // Complete the sync job with error
-      this.metadataManager.completeSyncJob(
-        jobId,
-        false,
-        "Some role-related components failed to import"
-      );
-
-      throw new Error("Some role-related components failed to import");
-    } else {
-      // Update sync status to synced
-      this.metadataManager.updateSyncStatus(jobType, "synced", now);
-
-      // Complete the sync job successfully
-      this.metadataManager.completeSyncJob(jobId, true);
-
-      console.log(
-        "\nRoles, policies, access and permissions imported successfully."
-      );
-    }
   };
 }
