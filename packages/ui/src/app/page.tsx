@@ -1,8 +1,11 @@
-"use client";
-
 import { redirect } from "next/navigation";
+import { auth } from "@/auth";
+import NewDashboardClient from "./components/NewDashboardClient";
 
-export default function Home() {
-  // Redirect to dashboard
-  redirect("/dashboard");
+export default async function Home() {
+  const session = await auth();
+  if (!session) {
+    redirect("/login");
+  }
+  return <NewDashboardClient />;
 }

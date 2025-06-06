@@ -34,10 +34,10 @@ After installation, the tool provides several commands to manage your Directus c
 
 Set the following environment variables to configure the tool:
 
-- `DIRECTUS_CT_URL`: The URL of your Directus instance.
-- `DIRECTUS_CT_TOKEN`: The API token for authentication.
-- `DIRECTUS_CT_CONFIG_PATH`: The path to your configuration files (defaults to `./config`).
-- `DIRECTUS_CT_API_PORT`: The port for the dashboard API server (defaults to `3001`).
+- `DCT_API_URL`: The URL of your Directus instance.
+- `DCT_TOKEN`: The API token for authentication.
+- `DCT_CONFIG_PATH`: The path to your configuration files (defaults to `./config`).
+- `DCT_API_PORT`: The port for the dashboard API server (defaults to `3001`).
 
 You can set these variables in your shell or define them in a `.env` file in your project root.
 
@@ -54,6 +54,7 @@ The toolkit supports the following commands:
 - `snapshot create`: Create a snapshot of the current Directus instance state.
 - `snapshot compare`: Compare the current snapshot with configuration files to identify differences.
 - `snapshot roles`: Check role identities between environments to identify roles that need mapping.
+- `audit import-diffs <type>`: Show a diff between local config and remote data for a specific import, showing only the latest snapshot.
 - `validate`: Check configuration files for potential import issues like duplicate IDs.
 - `dashboard`: Start the dashboard web interface for managing configurations.
 
@@ -116,18 +117,18 @@ You can also run the dashboard in Docker:
 
 ```bash
 docker run -p 3001:3001 \
-  -e DIRECTUS_CT_URL=http://your-directus-url \
-  -e DIRECTUS_CT_TOKEN=your_token \
+  -e DCT_API_URL=http://your-directus-url \
+  -e DCT_TOKEN=your_token \
   -v /path/to/config:/app/config \
   devrue/directus-config-toolkit:latest dashboard
 ```
 
 ### Dashboard Environment Variables
 
-- `DIRECTUS_CT_API_PORT`: Port for the dashboard API server (default: 3001)
-- `DIRECTUS_CT_URL`: URL of your Directus instance
-- `DIRECTUS_CT_TOKEN`: API token for authentication
-- `DIRECTUS_CT_CONFIG_PATH`: Path to your configuration files
+- `DCT_API_PORT`: Port for the dashboard API server (default: 3001)
+- `DCT_API_URL`: URL of your Directus instance
+- `DCT_TOKEN`: API token for authentication
+- `DCT_CONFIG_PATH`: Path to your configuration files
 
 ## Troubleshooting
 
@@ -229,6 +230,18 @@ Example of improved error reporting:
 ✅ access: Access entries imported successfully
 ❌ permissions: Foreign key constraint error: directus_permissions_role_foreign
 ```
+
+### Diff Improvements
+
+The toolkit now includes improved diffing when comparing local and remote configurations:
+
+- **Consistent Filtering**: Diffing now applies the same filtering as export, so you only see differences in the configurations that would actually be exported
+- **No System Components**: Admin roles, system policies, and default components are properly excluded from diffs
+- **Permission ID Handling**: Permission IDs are handled consistently between local and remote data
+- **Accurate Import Previews**: The `import-diffs` command now provides more accurate previews of what will actually change
+- **Latest Snapshot Only**: The `import-diffs` command now only shows the latest import snapshot set instead of all historical snapshots, making it easier to focus on the most recent changes
+
+When using the `import-diffs` command, you'll now see only the meaningful differences between your configuration files and the remote instance, without the noise of system components that are intentionally excluded during export.
 
 ## Contributing
 

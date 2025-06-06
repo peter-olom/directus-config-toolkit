@@ -24,7 +24,7 @@ export default function LoginForm() {
       if (result?.error) {
         setError(result.error || "Invalid credentials");
       } else if (result?.ok) {
-        router.push("/dashboard");
+        router.push("/");
       }
     } catch (err) {
       setError(

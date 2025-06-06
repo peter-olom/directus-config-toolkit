@@ -1,7 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // Types for the Directus Config Toolkit UI
 
-export type ConfigType = "flows" | "roles" | "settings" | "files" | "schema";
+export type ConfigType =
+  | "flows"
+  | "operations"
+  | "roles"
+  | "access"
+  | "policies"
+  | "permissions"
+  | "settings"
+  | "files"
+  | "folders"
+  | "schema";
 
 export interface ConfigStatus {
   type: ConfigType;
@@ -21,6 +31,24 @@ export interface DiffResult {
   type: ConfigType;
   differences: DiffItem[];
   timestamp: string;
+}
+
+export interface SnapshotInfo {
+  id: string;
+  path: string;
+}
+
+export interface AuditLogEntry {
+  timestamp: string;
+  operation: "import" | "export";
+  manager: string;
+  itemType: string;
+  status: "success" | "failure";
+  message?: string;
+  snapshotFile?: string;
+  localConfigSnapshot?: string;
+  remoteBeforeSnapshot?: string;
+  remoteAfterSnapshot?: string;
 }
 
 export interface SyncJob {

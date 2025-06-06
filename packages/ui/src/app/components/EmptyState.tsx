@@ -30,7 +30,7 @@ export default function EmptyState({
   }, [type, retryCount, refreshStatus]);
 
   return (
-    <div className="flex flex-col items-center justify-center p-8 text-center min-h-[200px]">
+    <div className="flex flex-col items-center justify-center p-8 text-center h-full w-full">
       {type === "loading" && (
         <div className="w-8 h-8 border-4 border-gray-300 border-t-blue-500 rounded-full animate-spin mb-4" />
       )}

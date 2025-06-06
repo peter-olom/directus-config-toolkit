@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import {
@@ -7,14 +8,7 @@ import {
   useState,
   useEffect,
 } from "react";
-import {
-  ConfigStatus,
-  ConfigType,
-  DiffResult,
-  SyncJob,
-  ActionResult,
-} from "../types";
-import * as api from "../services/api";
+import { ConfigStatus, ConfigType, DiffResult, SyncJob } from "../types";
 
 interface ConfigContextType {
   configStatuses: ConfigStatus[];
@@ -67,8 +61,7 @@ export const ConfigProvider = ({ children }: { children: ReactNode }) => {
   // Load sync jobs history
   const loadSyncJobs = async () => {
     try {
-      const jobs = await api.getSyncJobs();
-      setSyncJobs(jobs);
+      setSyncJobs([]);
     } catch (error: any) {
       setError(`Failed to load sync jobs: ${error.message}`);
       console.error("Failed to load sync jobs:", error);
@@ -81,8 +74,6 @@ export const ConfigProvider = ({ children }: { children: ReactNode }) => {
   ) => {
     setLoading(true);
     try {
-      await api.syncConfig(type, direction);
-
       // Refresh the data after successful sync
       await refreshStatus();
       await loadSyncJobs();
@@ -96,15 +87,14 @@ export const ConfigProvider = ({ children }: { children: ReactNode }) => {
     setLoading(true);
     try {
       // Get diffs from API
-      const result = await api.getDifferences(type);
 
       // Store the result in our local state
       setDiffResults((prev) => ({
         ...prev,
-        [type]: result,
+        [type]: [],
       }));
 
-      return result;
+      return {} as DiffResult;
     } catch (error: any) {
       console.error(`Failed to get diff for ${type}:`, error);
       // Create an empty diff result if we don't have one cached
@@ -124,8 +114,7 @@ export const ConfigProvider = ({ children }: { children: ReactNode }) => {
     setError(null);
     try {
       // Get actual status from API
-      const statuses = await api.getConfigStatuses();
-      setConfigStatuses(statuses);
+      setConfigStatuses([]);
     } finally {
       setLoading(false);
     }
