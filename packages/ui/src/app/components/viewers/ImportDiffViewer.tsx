@@ -157,17 +157,20 @@ export default function ImportDiffViewer({ type }: ImportDiffViewerProps) {
   const hasActual = diffData.data.before && diffData.data.after;
 
   const getDiffContent = () => {
+    // check actual first
+    if (hasActual) {
+      return {
+        original: JSON.stringify(diffData.data.before, null, 2),
+        modified: JSON.stringify(diffData.data.after, null, 2),
+        title: "Actual: Remote Before → Remote After (What Changed)",
+      };
+    }
+
     if (hasPreview) {
       return {
         original: JSON.stringify(diffData.data.before, null, 2),
         modified: JSON.stringify(diffData.data.local, null, 2),
         title: "Preview: Remote → Local (What Would Change)",
-      };
-    } else if (hasActual) {
-      return {
-        original: JSON.stringify(diffData.data.before, null, 2),
-        modified: JSON.stringify(diffData.data.after, null, 2),
-        title: "Actual: Remote Before → Remote After (What Changed)",
       };
     }
     return null;
