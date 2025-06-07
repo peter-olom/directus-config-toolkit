@@ -1,0 +1,10 @@
+# Ignore dependencies and build output
+node_modules
+.next
+dist
+*.log
+npm-debug.log
+Dockerfile
+.dockerignore
+.env*
+coverage

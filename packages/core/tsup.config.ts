@@ -20,8 +20,5 @@ export default defineConfig([
     target: "node16",
     dts: false,
     noExternal: [],
-    outExtension({ format }) {
-      return { js: ".js" };
-    },
   },
 ]);

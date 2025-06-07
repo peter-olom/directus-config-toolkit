@@ -42,7 +42,7 @@ const supportedTypes = Object.keys(managers) as ConfigType[];
 const program = new Command();
 
 program
-  .name("directus-ct")
+  .name("directus-config-toolkit")
   .description("CLI tool for managing Directus configurations")
   .version(pkg.version);
 
