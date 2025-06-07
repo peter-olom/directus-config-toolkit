@@ -12,6 +12,8 @@
     "@devrue/directus-config-toolkit": "file:../core",
     "@directus/sdk": "^19.1.0",
     "@monaco-editor/react": "^4.7.0",
+    "@types/bcrypt": "^5.0.2",
+    "bcrypt": "^6.0.0",
     "date-fns": "^4.1.0",
     "next": "15.3.2",
     "next-auth": "^5.0.0-beta.28",

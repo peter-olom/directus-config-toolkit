@@ -1,6 +1,7 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import type { CookieOption } from "@auth/core/types";
+import { compareSync } from "bcrypt";
 
 const cookieOptions: CookieOption["options"] = {
   httpOnly: true,
@@ -23,12 +24,22 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       async authorize(credentials) {
         const validUsername = process.env.DCT_UI_USERNAME;
         const validPassword = process.env.DCT_UI_PASSWORD;
+
         if (!validUsername || !validPassword) return null;
-        if (
-          credentials?.username === validUsername &&
-          credentials?.password === validPassword
-        ) {
-          return { id: "admin", name: validUsername };
+
+        if (credentials?.username === validUsername) {
+          // Use bcrypt to compare the hashed password
+          try {
+            const passwordMatches = compareSync(
+              credentials.password as string,
+              validPassword
+            );
+            if (passwordMatches) {
+              return { id: "admin", name: validUsername };
+            }
+          } catch (error) {
+            console.error("Password comparison error:", error);
+          }
         }
         return null;
       },
