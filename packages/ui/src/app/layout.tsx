@@ -1,7 +1,6 @@
+import "./globals.css";
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import "./globals.css";
-import { ConfigProvider } from "./components/ConfigContext";
 import { ThemeProvider } from "./components/ThemeContext";
 import ThemeClassManager from "./components/ThemeClassManager";
 import { Toaster } from "react-hot-toast";
@@ -58,7 +57,7 @@ export default function RootLayout({
       >
         <ThemeProvider>
           <ThemeClassManager />
-          <ConfigProvider>{children}</ConfigProvider>
+          {children}
           <Toaster />
         </ThemeProvider>
       </body>

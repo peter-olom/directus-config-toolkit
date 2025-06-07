@@ -1,8 +1,6 @@
 "use client";
 
-import { useConfig } from "../components/ConfigContext";
 import Navbar from "../components/Navbar";
-import EmptyState from "../components/EmptyState";
 import SplitLayout from "../components/layout/SplitLayout";
 import ItemTypeNavigator from "../components/layout/ItemTypeNavigator";
 import TabView from "../components/layout/TabView";
@@ -75,31 +73,6 @@ export default function NewDashboardClient() {
     CONFIG_TYPES,
     SYNC_SUPPORTED_TYPES
   );
-  const { configStatuses, loading, error } = useConfig();
-
-  // Show loading state when initializing
-  if (loading && configStatuses.length === 0) {
-    return (
-      <div className="min-h-screen bg-background">
-        <Navbar />
-        <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-          <EmptyState type="loading" message="Loading configuration data..." />
-        </main>
-      </div>
-    );
-  }
-
-  // Show error state if there's an error and no data
-  if (error && configStatuses.length === 0) {
-    return (
-      <div className="min-h-screen bg-background">
-        <Navbar />
-        <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-          <EmptyState type="error" message={`Error loading data: ${error}`} />
-        </main>
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col h-screen">

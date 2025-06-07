@@ -1,8 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useConfig } from "./ConfigContext";
-
 export default function EmptyState({
   type,
   message,
@@ -12,23 +9,6 @@ export default function EmptyState({
   message: string;
   children?: React.ReactNode;
 }) {
-  const [retryCount, setRetryCount] = useState(0);
-  const { refreshStatus } = useConfig();
-
-  // Auto retry on error with exponential backoff
-  useEffect(() => {
-    if (type !== "error") return;
-
-    const timeout = setTimeout(() => {
-      if (retryCount < 3) {
-        refreshStatus();
-        setRetryCount((prev) => prev + 1);
-      }
-    }, Math.min(1000 * Math.pow(2, retryCount), 8000));
-
-    return () => clearTimeout(timeout);
-  }, [type, retryCount, refreshStatus]);
-
   return (
     <div className="flex flex-col items-center justify-center p-8 text-center h-full w-full">
       {type === "loading" && (
@@ -76,18 +56,6 @@ export default function EmptyState({
       <p className="text-lg font-medium mb-2 text-gray-700 dark:text-amber-100">
         {message}
       </p>
-
-      {type === "error" && retryCount >= 3 && (
-        <button
-          onClick={() => {
-            setRetryCount(0);
-            refreshStatus();
-          }}
-          className="mt-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded transition-colors"
-        >
-          Retry
-        </button>
-      )}
 
       {children}
     </div>
