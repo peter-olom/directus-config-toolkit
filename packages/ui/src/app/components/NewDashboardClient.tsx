@@ -1,7 +1,5 @@
 "use client";
 
-import { useState } from "react";
-import { ConfigType } from "../types";
 import { useConfig } from "../components/ConfigContext";
 import Navbar from "../components/Navbar";
 import EmptyState from "../components/EmptyState";
@@ -12,9 +10,71 @@ import LatestConfigViewer from "../components/viewers/LatestConfigViewer";
 import TimeMachineViewer from "../components/viewers/TimeMachineViewer";
 import ImportDiffViewer from "../components/viewers/ImportDiffViewer";
 import AuditLogViewer from "../components/viewers/AuditLogViewer";
+import { useSelectedType } from "../hooks";
+
+// Define the config types that support sync operations
+const SYNC_SUPPORTED_TYPES = ["flows", "roles", "settings", "files", "schema"];
+
+// Define all config types
+const CONFIG_TYPES = [
+  {
+    type: "roles",
+    label: "Roles",
+    description: "User roles and permissions groups",
+  },
+  {
+    type: "access",
+    label: "Access",
+    description: "Access control settings",
+  },
+  {
+    type: "permissions",
+    label: "Permissions",
+    description: "Detailed permissions configuration",
+  },
+  {
+    type: "policies",
+    label: "Policies",
+    description: "Security policies",
+  },
+  {
+    type: "schema",
+    label: "Schema",
+    description: "Database schema configuration",
+  },
+  {
+    type: "files",
+    label: "Files",
+    description: "File storage settings",
+  },
+  {
+    type: "folders",
+    label: "Folders",
+    description: "File organization structure",
+  },
+  {
+    type: "flows",
+    label: "Flows",
+    description: "Automation workflows",
+  },
+  {
+    type: "operations",
+    label: "Operations",
+    description: "Operations within flows",
+  },
+  {
+    type: "settings",
+    label: "Settings",
+    description: "System settings",
+  },
+];
 
 export default function NewDashboardClient() {
-  const [selectedType, setSelectedType] = useState<ConfigType | null>(null);
+  // Use the custom hook for selected type management
+  const { selectedType, setSelectedType } = useSelectedType(
+    CONFIG_TYPES,
+    SYNC_SUPPORTED_TYPES
+  );
   const { configStatuses, loading, error } = useConfig();
 
   // Show loading state when initializing
@@ -50,6 +110,7 @@ export default function NewDashboardClient() {
             <ItemTypeNavigator
               selectedType={selectedType}
               onSelectType={setSelectedType}
+              supportsSync={(type) => SYNC_SUPPORTED_TYPES.includes(type)}
             />
           }
           rightPanel={
@@ -77,6 +138,7 @@ export default function NewDashboardClient() {
                 },
               ]}
               defaultTabId="latest"
+              storageKey="selectedConfigTab"
             />
           }
         />

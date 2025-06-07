@@ -4,6 +4,7 @@ import "./globals.css";
 import { ConfigProvider } from "./components/ConfigContext";
 import { ThemeProvider } from "./components/ThemeContext";
 import ThemeClassManager from "./components/ThemeClassManager";
+import { Toaster } from "react-hot-toast";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -58,6 +59,7 @@ export default function RootLayout({
         <ThemeProvider>
           <ThemeClassManager />
           <ConfigProvider>{children}</ConfigProvider>
+          <Toaster />
         </ThemeProvider>
       </body>
     </html>

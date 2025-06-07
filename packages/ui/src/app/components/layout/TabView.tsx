@@ -1,6 +1,7 @@
 "use client";
 
-import { ReactNode, useState } from "react";
+import { ReactNode } from "react";
+import { useTabState } from "@/app/hooks";
 
 interface Tab {
   id: string;
@@ -11,15 +12,20 @@ interface Tab {
 interface TabViewProps {
   tabs: Tab[];
   defaultTabId?: string;
+  storageKey?: string;
 }
 
 /**
  * TabView component for showing different views in the right panel.
+ * Can persist the active tab state to localStorage if storageKey is provided.
  */
-export default function TabView({ tabs, defaultTabId }: TabViewProps) {
-  const [activeTab, setActiveTab] = useState<string>(
-    defaultTabId || (tabs.length > 0 ? tabs[0].id : "")
-  );
+export default function TabView({
+  tabs,
+  defaultTabId,
+  storageKey,
+}: TabViewProps) {
+  // Use our custom hook for tab state management with localStorage persistence
+  const [activeTab, setActiveTab] = useTabState(tabs, defaultTabId, storageKey);
 
   return (
     <div className="flex flex-col h-full">

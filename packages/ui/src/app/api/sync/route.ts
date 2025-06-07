@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
   if (session instanceof NextResponse) return session;
 
   try {
-    const { type, direction } = await request.json();
+    const { type, direction, dryRun = false } = await request.json();
 
     if (!type || !direction) {
       return NextResponse.json(
@@ -31,19 +31,19 @@ export async function POST(request: NextRequest) {
     if (direction === "import") {
       switch (type) {
         case "flows":
-          await flowsManager.importFlows();
+          await flowsManager.importFlows(dryRun);
           break;
         case "roles":
-          await rolesManager.importRoles();
+          await rolesManager.importRoles(dryRun);
           break;
         case "settings":
-          await settingsManager.importSettings();
+          await settingsManager.importSettings(dryRun);
           break;
         case "files":
-          await filesManager.importFiles();
+          await filesManager.importFiles(dryRun);
           break;
         case "schema":
-          await schemaManager.importSchema();
+          await schemaManager.importSchema(dryRun);
           break;
         default:
           throw new Error(`Unsupported type for import: ${type}`);
