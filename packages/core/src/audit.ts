@@ -1,7 +1,6 @@
 import fs from "fs-extra";
 import path from "path";
 import { diffJson } from "diff";
-import chalk from "chalk";
 
 export interface AuditLogEntry {
   timestamp: string;
@@ -31,6 +30,7 @@ export interface SnapshotInfo {
 export class AuditManager {
   private auditLogFilePath: string;
   private snapshotsBaseDir: string;
+  private chalkPromise: Promise<any> | null = null; // To store the promise of chalk.default
 
   /**
    * Create a new AuditManager.
@@ -51,6 +51,14 @@ export class AuditManager {
     this.snapshotsBaseDir = path.join(resolvedAuditDir, "snapshots");
     fs.ensureDirSync(this.snapshotsBaseDir);
     fs.ensureFileSync(this.auditLogFilePath);
+  }
+
+  private getChalk(): Promise<any> {
+    if (!this.chalkPromise) {
+      // Dynamically import chalk and store the promise for its default export
+      this.chalkPromise = import("chalk").then((module) => module.default);
+    }
+    return this.chalkPromise;
   }
 
   /**
@@ -127,6 +135,7 @@ export class AuditManager {
     snapshotPath1: string,
     snapshotPath2: string
   ): Promise<string> {
+    const chalk = await this.getChalk();
     if (!(await fs.pathExists(snapshotPath1))) {
       throw new Error(`Snapshot file not found: ${snapshotPath1}`);
     }
@@ -178,6 +187,7 @@ export class AuditManager {
   ) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const dir = this.getSnapshotDir(itemType);
+    await fs.ensureDir(dir); // Ensure directory exists before writing snapshots
 
     // Store local config snapshot
     const localConfigSnapshot = path.join(
@@ -237,6 +247,7 @@ export class AuditManager {
    * Only shows the latest snapshot set by default
    */
   async printImportDiffs(itemType: string) {
+    const chalk = await this.getChalk();
     const dir = this.getSnapshotDir(itemType);
     if (!(await fs.pathExists(dir))) {
       console.log(chalk.yellow(`No snapshots found for "${itemType}".`));
@@ -309,6 +320,7 @@ export class AuditManager {
     itemType: string,
     options?: { limit?: number; startTime?: string | Date }
   ) {
+    const chalk = await this.getChalk();
     let snapshots = (await this.getSnapshots(itemType)).filter(
       (snap) => !snap.id.includes("_import_")
     );
@@ -340,8 +352,83 @@ export class AuditManager {
       });
     }
     const limit = options?.limit ?? 5;
-    const start = limit ? Math.max(0, snapshots.length - limit) : 0;
-    for (let i = start + 1; i < snapshots.length; i++) {
+    const start = limit ? Math.max(0, snapshots.length - limit - 1) : 0; // Corrected start index logic for pairs
+
+    const diffsToShow = snapshots.slice(start);
+    if (diffsToShow.length < 2 && snapshots.length >= 2) {
+      // Ensure we show at least one diff if possible
+      // If limit reduced it to less than 2, but we have enough overall, adjust to show the last diff
+      if (snapshots.length - 1 >= 0) {
+        for (
+          let i = Math.max(1, snapshots.length - limit);
+          i < snapshots.length;
+          i++
+        ) {
+          const prev = snapshots[i - 1];
+          const curr = snapshots[i];
+          console.log(
+            chalk.blue.bold(
+              `\n=== Diff: ${prev.id} → ${curr.id} (${itemType}) ===\n`
+            )
+          );
+          const diff = await this.diffSnapshots(prev.path, curr.path);
+          if (diff.trim().length === 0) {
+            console.log(chalk.gray("No changes.\n"));
+          } else {
+            console.log(diff + "\n");
+          }
+        }
+        return;
+      }
+    }
+
+    for (let i = 1; i < diffsToShow.length; i++) {
+      // Adjust index to be relative to diffsToShow, but access original snapshots array
+      const prev = diffsToShow[i - 1];
+      const curr = diffsToShow[i];
+      console.log(
+        chalk.blue.bold(
+          `\n=== Diff: ${prev.id} → ${curr.id} (${itemType}) ===\n`
+        )
+      );
+      const diff = await this.diffSnapshots(prev.path, curr.path);
+      if (diff.trim().length === 0) {
+        console.log(chalk.gray("No changes.\n"));
+      } else {
+        console.log(diff + "\n");
+      }
+    }
+    if (
+      diffsToShow.length < 2 &&
+      snapshots.length >= 2 &&
+      limit >= snapshots.length - 1
+    ) {
+      // This case handles when limit is high enough to include all, but we only had 2 total snapshots.
+      // The loop above wouldn't run if diffsToShow.length is 1 (e.g. limit=1 from 2 snapshots)
+      // or if diffsToShow.length is 0.
+      // The previous correction for `start` and the loop condition `i < diffsToShow.length` should handle most cases.
+      // This specific block might be redundant now or needs careful review of edge cases with `limit`.
+      // For simplicity and correctness, the loop `for (let i = Math.max(1, snapshots.length - limit); i < snapshots.length; i++)`
+      // from the previous thought block is more direct for "last N diffs".
+      // Let's stick to a simpler loop for the last N diffs.
+    }
+
+    // Revised loop for showing last N diffs:
+    // Calculate the starting point in the original snapshots array to get `limit` number of diffs.
+    // A diff is between snapshots[i-1] and snapshots[i].
+    // If limit is 5, we want 5 diffs: (s[n-6],s[n-5]), ..., (s[n-2],s[n-1])
+    // So, `i` should go from `snapshots.length - limit` up to `snapshots.length - 1`.
+    // The first `prev` would be `snapshots[snapshots.length - limit - 1]`.
+    // The loop should start for `curr` at `snapshots.length - limit`.
+
+    // Clearing previous loop logic for printTimeMachineDiff for clarity
+    if (snapshots.length < 2) return; // Already handled, but good guard
+
+    const numDiffsToShow = Math.min(limit, snapshots.length - 1);
+    const loopStartIndex = snapshots.length - numDiffsToShow;
+
+    for (let i = loopStartIndex; i < snapshots.length; i++) {
+      if (i === 0) continue; // Should not happen if snapshots.length >= 2 and numDiffsToShow >= 1
       const prev = snapshots[i - 1];
       const curr = snapshots[i];
       console.log(
