@@ -6,7 +6,15 @@ import { signIn } from "next-auth/react";
 import ThemeToggle from "./ThemeToggle";
 import Image from "next/image";
 
-export default function LoginForm() {
+interface LoginFormProps {
+  corePackageVersion?: string;
+  uiPackageVersion?: string;
+}
+
+export default function LoginForm({
+  corePackageVersion,
+  uiPackageVersion,
+}: LoginFormProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -138,6 +146,11 @@ export default function LoginForm() {
             </div>
           </form>
         </div>
+        {uiPackageVersion && corePackageVersion && (
+          <div className="text-center text-xs text-[#7d6957]/70 dark:text-amber-300/50 mt-2">
+            UI v{uiPackageVersion} | Core v{corePackageVersion}
+          </div>
+        )}
       </div>
     </div>
   );
