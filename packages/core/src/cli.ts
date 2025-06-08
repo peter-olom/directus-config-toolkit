@@ -6,6 +6,7 @@ import { registerConfigCommands } from "./commands/configCommands";
 import { registerAuditCommands } from "./commands/auditCommands";
 import { registerDebugCommands } from "./commands/debugCommands";
 import { registerHashPasswordCommand } from "./commands/hashPasswordCommand";
+import { registerUICommand } from "./commands/uiCommand";
 import pkg from "../package.json";
 
 const program = new Command();
@@ -20,5 +21,6 @@ registerConfigCommands(program);
 registerAuditCommands(program);
 registerDebugCommands(program);
 registerHashPasswordCommand(program);
+registerUICommand(program);
 
 program.parse();
