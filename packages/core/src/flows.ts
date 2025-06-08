@@ -167,7 +167,12 @@ export class FlowsManager {
         const existingFlow = destinationFlows.find((f) => f.id === flow.id);
         if (existingFlow) {
           if (!_.isEqual(existingFlow, flow)) {
-            await client.request(updateFlow(flow.id, flow));
+            // Preserve date_created when updating existing flows
+            const updateData = { ...flow };
+            if (existingFlow.date_created) {
+              updateData.date_created = existingFlow.date_created;
+            }
+            await client.request(updateFlow(flow.id, updateData));
           }
         } else {
           await client.request(createFlow(flow));
@@ -197,6 +202,16 @@ export class FlowsManager {
     // Get all flows to identify which operations need to be regenerated
     const incomingFlows = JSON.parse(readFileSync(this.flowPath, "utf8"));
 
+    // Create a map to store original date_created values
+    const operationDates = new Map();
+
+    // Store original date_created values before deletion
+    destinationOperations.forEach((op) => {
+      if (op.date_created) {
+        operationDates.set(op.id, op.date_created);
+      }
+    });
+
     // Delete all existing operations for the flows we're importing
     // This ensures we don't have uniqueness constraint violations for the "resolve" field
     const operationsToDelete = destinationOperations.filter((operation) => {
@@ -223,6 +238,10 @@ export class FlowsManager {
     console.log(`Creating ${sortedOperations.length} operations`);
     try {
       for (const operation of sortedOperations) {
+        // Preserve original date_created if it existed
+        if (operationDates.has(operation.id)) {
+          operation.date_created = operationDates.get(operation.id);
+        }
         await client.request(createOperation(operation));
       }
       console.log("All operations created successfully");
