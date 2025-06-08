@@ -21,7 +21,8 @@ export interface SnapshotInfo {
 }
 
 /**
- * AuditManager provides robust auditing for import/export operations.
+ * AuditManager
+ * robust auditing for import/export operations.
  * It stores audit logs and JSON snapshots of configuration states, enabling time machine diffs and traceability.
  *
  * Snapshots and logs are stored in a configurable directory (default: ./audit/).
@@ -31,6 +32,7 @@ export class AuditManager {
   private auditLogFilePath: string;
   private snapshotsBaseDir: string;
   private chalkPromise: Promise<any> | null = null; // To store the promise of chalk.default
+  private retentionPeriodDays: number; // Number of days to keep snapshots
 
   /**
    * Create a new AuditManager.
@@ -49,6 +51,11 @@ export class AuditManager {
     }
     this.auditLogFilePath = path.join(resolvedAuditDir, "audit.ndjson");
     this.snapshotsBaseDir = path.join(resolvedAuditDir, "snapshots");
+
+    // Set retention period from environment variable or default to 30 days
+    const retentionDays = process.env.DCT_AUDIT_RETENTION_DAYS;
+    this.retentionPeriodDays = retentionDays ? parseInt(retentionDays, 10) : 30;
+
     fs.ensureDirSync(this.snapshotsBaseDir);
     fs.ensureFileSync(this.auditLogFilePath);
   }
@@ -100,6 +107,10 @@ export class AuditManager {
     const filename = `${identifier || timestamp}_${itemType}.json`;
     const snapshotFilePath = path.join(dir, filename);
     await fs.writeJson(snapshotFilePath, data, { spaces: 2 });
+
+    // Prune old snapshots after creating a new one
+    await this.pruneOldSnapshots(itemType);
+
     return snapshotFilePath;
   }
 
@@ -398,30 +409,7 @@ export class AuditManager {
         console.log(diff + "\n");
       }
     }
-    if (
-      diffsToShow.length < 2 &&
-      snapshots.length >= 2 &&
-      limit >= snapshots.length - 1
-    ) {
-      // This case handles when limit is high enough to include all, but we only had 2 total snapshots.
-      // The loop above wouldn't run if diffsToShow.length is 1 (e.g. limit=1 from 2 snapshots)
-      // or if diffsToShow.length is 0.
-      // The previous correction for `start` and the loop condition `i < diffsToShow.length` should handle most cases.
-      // This specific block might be redundant now or needs careful review of edge cases with `limit`.
-      // For simplicity and correctness, the loop `for (let i = Math.max(1, snapshots.length - limit); i < snapshots.length; i++)`
-      // from the previous thought block is more direct for "last N diffs".
-      // Let's stick to a simpler loop for the last N diffs.
-    }
 
-    // Revised loop for showing last N diffs:
-    // Calculate the starting point in the original snapshots array to get `limit` number of diffs.
-    // A diff is between snapshots[i-1] and snapshots[i].
-    // If limit is 5, we want 5 diffs: (s[n-6],s[n-5]), ..., (s[n-2],s[n-1])
-    // So, `i` should go from `snapshots.length - limit` up to `snapshots.length - 1`.
-    // The first `prev` would be `snapshots[snapshots.length - limit - 1]`.
-    // The loop should start for `curr` at `snapshots.length - limit`.
-
-    // Clearing previous loop logic for printTimeMachineDiff for clarity
     if (snapshots.length < 2) return; // Already handled, but good guard
 
     const numDiffsToShow = Math.min(limit, snapshots.length - 1);
@@ -443,5 +431,188 @@ export class AuditManager {
         console.log(diff + "\n");
       }
     }
+  }
+
+  /**
+   * Prunes snapshots older than the retention period.
+   * @param itemType Optional item type to prune. If not provided, prunes all item types.
+   * @returns Number of snapshots removed.
+   */
+  async pruneOldSnapshots(itemType?: string): Promise<number> {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - this.retentionPeriodDays);
+
+    let snapshotsRemoved = 0;
+
+    // If itemType is provided, only prune that type
+    if (itemType) {
+      snapshotsRemoved = await this.pruneItemTypeSnapshots(
+        itemType,
+        cutoffDate
+      );
+    } else {
+      // Otherwise, prune all item types
+      try {
+        const itemTypes = await fs.readdir(this.snapshotsBaseDir);
+        for (const type of itemTypes) {
+          const typePath = path.join(this.snapshotsBaseDir, type);
+          const stats = await fs.stat(typePath);
+          if (stats.isDirectory()) {
+            snapshotsRemoved += await this.pruneItemTypeSnapshots(
+              type,
+              cutoffDate
+            );
+          }
+        }
+      } catch (err) {
+        // Directory might not exist yet
+        if (
+          typeof err === "object" &&
+          err !== null &&
+          "code" in err &&
+          (err as any).code !== "ENOENT"
+        ) {
+          throw err;
+        }
+      }
+    }
+
+    return snapshotsRemoved;
+  }
+
+  /**
+   * Parse a snapshot filename to extract its date.
+   * @param snapshotId The snapshot filename
+   * @returns A Date object representing the snapshot creation time
+   */
+  private parseSnapshotDate(snapshotId: string): Date {
+    // Extract the timestamp part from the filename
+    const fileSafeDate = snapshotId.split("_")[0];
+
+    // Split into date and time parts at "T"
+    const [datePart, timePart] = fileSafeDate.split("T");
+    if (!timePart) throw new Error("Invalid date format");
+
+    // Match the time part pattern: HH-mm-ss-mmmZ
+    const match = timePart.match(/^(\d{2})-(\d{2})-(\d{2})-?(\d{3})Z$/);
+    if (!match) throw new Error("Invalid time format");
+
+    const [, hours, minutes, seconds, millis] = match;
+    // Reconstitute the valid ISO date string: YYYY-MM-DDTHH:mm:ss.mmmZ
+    const reconstituted = `${datePart}T${hours}:${minutes}:${seconds}.${millis}Z`;
+    return new Date(reconstituted);
+  }
+
+  /**
+   * Prunes snapshots for a specific item type that are older than the cutoff date.
+   * @param itemType The item type to prune.
+   * @param cutoffDate The date before which snapshots should be removed.
+   * @returns Number of snapshots removed.
+   */
+  private async pruneItemTypeSnapshots(
+    itemType: string,
+    cutoffDate: Date
+  ): Promise<number> {
+    let removedCount = 0;
+    const snapshots = await this.getSnapshots(itemType);
+
+    // Define minimum number of regular snapshots and import sets to keep
+    const MINIMUM_REGULAR_SNAPSHOTS = 3;
+    const MINIMUM_IMPORT_SETS = 2;
+
+    // Separate regular snapshots from import snapshots
+    const regularSnapshots: SnapshotInfo[] = [];
+    const importSnapshots: Record<string, SnapshotInfo[]> = {};
+
+    for (const snapshot of snapshots) {
+      const importMatch = snapshot.id.match(/^([\dT\-:Z]+)_import_/);
+      if (importMatch) {
+        // This is an import snapshot
+        const timestamp = importMatch[1];
+        if (!importSnapshots[timestamp]) {
+          importSnapshots[timestamp] = [];
+        }
+        importSnapshots[timestamp].push(snapshot);
+      } else {
+        // This is a regular snapshot
+        regularSnapshots.push(snapshot);
+      }
+    }
+
+    // Sort regular snapshots by date (newest first)
+    regularSnapshots.sort((a, b) => {
+      try {
+        const dateA = this.parseSnapshotDate(a.id);
+        const dateB = this.parseSnapshotDate(b.id);
+        return dateB.getTime() - dateA.getTime(); // Newest first
+      } catch {
+        return b.id.localeCompare(a.id); // Fallback to string comparison
+      }
+    });
+
+    // Sort import snapshot sets by date (newest first)
+    const importSets = Object.keys(importSnapshots).sort((a, b) =>
+      b.localeCompare(a)
+    );
+
+    // We need to ensure we keep at least the minimum number of snapshots
+    // regardless of their age
+    let keptRegularCount = 0;
+    let keptImportSetsCount = 0;
+
+    // Check regular snapshots for pruning
+    for (const snapshot of regularSnapshots) {
+      try {
+        const snapshotDate = this.parseSnapshotDate(snapshot.id);
+
+        // Always keep at least MINIMUM_REGULAR_SNAPSHOTS regular snapshots
+        if (keptRegularCount < MINIMUM_REGULAR_SNAPSHOTS) {
+          keptRegularCount++;
+          continue;
+        }
+
+        // Only prune snapshots that are older than the cutoff date
+        if (snapshotDate < cutoffDate) {
+          await fs.remove(snapshot.path);
+          removedCount++;
+        } else {
+          keptRegularCount++;
+        }
+      } catch (err: any) {
+        console.warn(`Could not parse timestamp for snapshot: ${snapshot.id}`);
+        // Keep snapshots with unparseable timestamps just to be safe
+        keptRegularCount++;
+      }
+    }
+
+    // Check import sets for pruning
+    for (const timestamp of importSets) {
+      try {
+        const snapshotDate = this.parseSnapshotDate(`${timestamp}_dummy`);
+
+        // Always keep at least MINIMUM_IMPORT_SETS import sets
+        if (keptImportSetsCount < MINIMUM_IMPORT_SETS) {
+          keptImportSetsCount++;
+          continue;
+        }
+
+        // Only prune import sets that are older than the cutoff date
+        if (snapshotDate < cutoffDate) {
+          // Prune all snapshots in this import set
+          for (const snapshot of importSnapshots[timestamp]) {
+            await fs.remove(snapshot.path);
+            removedCount++;
+          }
+        } else {
+          keptImportSetsCount++;
+        }
+      } catch (err: any) {
+        console.warn(`Could not parse timestamp for import set: ${timestamp}`);
+        // Keep import sets with unparseable timestamps just to be safe
+        keptImportSetsCount++;
+      }
+    }
+
+    return removedCount;
   }
 }
