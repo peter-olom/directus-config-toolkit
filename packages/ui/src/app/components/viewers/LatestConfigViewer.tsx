@@ -73,11 +73,11 @@ export default function LatestConfigViewer({ type }: LatestConfigViewerProps) {
   }
 
   return (
-    <div className="h-full">
+    <div className="h-full min-h-[500px]">
       <h2 className="text-xl font-semibold mb-4 text-gray-700 dark:text-amber-100">
         {type.charAt(0).toUpperCase() + type.slice(1)} Configuration
       </h2>
-      <div className="border border-gray-200 dark:border-[#3b2d27] rounded-md h-[calc(100%-3rem)]">
+      <div className="border border-gray-200 dark:border-[#3b2d27] rounded-md h-[calc(100%-3rem)] min-h-[400px]">
         <Editor
           height="100%"
           defaultLanguage="json"

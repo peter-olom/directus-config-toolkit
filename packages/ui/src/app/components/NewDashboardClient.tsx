@@ -1,5 +1,6 @@
 "use client";
 
+import React, { useRef } from "react";
 import Navbar from "../components/Navbar";
 import SplitLayout from "../components/layout/SplitLayout";
 import ItemTypeNavigator from "../components/layout/ItemTypeNavigator";
@@ -9,6 +10,7 @@ import TimeMachineViewer from "../components/viewers/TimeMachineViewer";
 import ImportDiffViewer from "../components/viewers/ImportDiffViewer";
 import AuditLogViewer from "../components/viewers/AuditLogViewer";
 import { useSelectedType } from "../hooks";
+import type { ConfigType } from "../types";
 
 // Define the config types that support sync operations
 const SYNC_SUPPORTED_TYPES = ["flows", "roles", "settings", "files", "schema"];
@@ -73,6 +75,24 @@ export default function NewDashboardClient() {
     CONFIG_TYPES,
     SYNC_SUPPORTED_TYPES
   );
+  const tabViewRef = useRef<HTMLDivElement>(null);
+
+  // Handler to set type and scroll to TabView
+  const handleSelectType = (type: ConfigType) => {
+    setSelectedType(type);
+    setTimeout(() => {
+      if (tabViewRef.current) {
+        const rect = tabViewRef.current.getBoundingClientRect();
+        const scrollTop =
+          window.pageYOffset || document.documentElement.scrollTop;
+        const offset = 16; // adjust if you have a fixed header
+        window.scrollTo({
+          top: rect.top + scrollTop - offset,
+          behavior: "smooth",
+        });
+      }
+    }, 100);
+  };
 
   return (
     <div className="flex flex-col h-screen">
@@ -82,37 +102,39 @@ export default function NewDashboardClient() {
           leftPanel={
             <ItemTypeNavigator
               selectedType={selectedType}
-              onSelectType={setSelectedType}
+              onSelectType={handleSelectType}
               supportsSync={(type) => SYNC_SUPPORTED_TYPES.includes(type)}
             />
           }
           rightPanel={
-            <TabView
-              tabs={[
-                {
-                  id: "latest",
-                  label: "Latest Config",
-                  content: <LatestConfigViewer type={selectedType} />,
-                },
-                {
-                  id: "timeMachine",
-                  label: "Time Machine",
-                  content: <TimeMachineViewer type={selectedType} />,
-                },
-                {
-                  id: "auditLog",
-                  label: "Audit Log",
-                  content: <AuditLogViewer type={selectedType} />,
-                },
-                {
-                  id: "importDiff",
-                  label: "Import Diff",
-                  content: <ImportDiffViewer type={selectedType} />,
-                },
-              ]}
-              defaultTabId="latest"
-              storageKey="selectedConfigTab"
-            />
+            <div ref={tabViewRef} className="h-full">
+              <TabView
+                tabs={[
+                  {
+                    id: "latest",
+                    label: "Latest Config",
+                    content: <LatestConfigViewer type={selectedType} />,
+                  },
+                  {
+                    id: "timeMachine",
+                    label: "Time Machine",
+                    content: <TimeMachineViewer type={selectedType} />,
+                  },
+                  {
+                    id: "auditLog",
+                    label: "Audit Log",
+                    content: <AuditLogViewer type={selectedType} />,
+                  },
+                  {
+                    id: "importDiff",
+                    label: "Import Diff",
+                    content: <ImportDiffViewer type={selectedType} />,
+                  },
+                ]}
+                defaultTabId="latest"
+                storageKey="selectedConfigTab"
+              />
+            </div>
           }
         />
       </main>

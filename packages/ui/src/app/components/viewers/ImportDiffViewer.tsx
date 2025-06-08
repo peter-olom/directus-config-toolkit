@@ -179,15 +179,15 @@ export default function ImportDiffViewer({ type }: ImportDiffViewerProps) {
   const content = getDiffContent();
 
   return (
-    <div className="h-full">
+    <div className="h-full min-h-[600px]">
       <h2 className="text-xl font-semibold mb-4">
         {type.charAt(0).toUpperCase() + type.slice(1)} Import Differences
       </h2>
 
       {content ? (
-        <div className="h-[calc(100%-11rem)]">
+        <div className="h-[calc(100%-5rem)] min-h-[500px]">
           <h3 className="font-medium text-md mb-2">{content.title}</h3>
-          <div className="border border-gray-200 dark:border-[#3b2d27] rounded-lg h-full">
+          <div className="border border-gray-200 dark:border-[#3b2d27] rounded-lg h-full min-h-[450px]">
             <DiffEditor
               height="100%"
               original={content.original}
