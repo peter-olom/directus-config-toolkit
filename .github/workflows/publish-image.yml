@@ -3,7 +3,8 @@ name: Build and Publish Docker Images
 on:
   push:
     tags:
-      - "v*"
+      - "v*" # Core releases (triggers both Core+UI)
+      - "ui-v*" # UI-only releases (triggers UI only)
   workflow_dispatch:
     inputs:
       tag:
@@ -25,41 +26,58 @@ permissions:
   packages: write
 
 jobs:
-  detect-changes:
+  detect-tag-type:
     runs-on: ubuntu-latest
     outputs:
-      core: ${{ steps.filter.outputs.core }}
-      ui: ${{ steps.filter.outputs.ui }}
+      is_core_release: ${{ steps.check-tag.outputs.is_core_release }}
+      is_ui_release: ${{ steps.check-tag.outputs.is_ui_release }}
       version: ${{ steps.get-version.outputs.version }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Check tag type
+        id: check-tag
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+            
+            if [[ "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "is_core_release=true" >> $GITHUB_OUTPUT
+              echo "is_ui_release=false" >> $GITHUB_OUTPUT
+              echo "Core release detected: $TAG_NAME"
+            elif [[ "$TAG_NAME" =~ ^ui-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "is_core_release=false" >> $GITHUB_OUTPUT
+              echo "is_ui_release=true" >> $GITHUB_OUTPUT
+              echo "UI-only release detected: $TAG_NAME"
+            else
+              echo "is_core_release=false" >> $GITHUB_OUTPUT
+              echo "is_ui_release=false" >> $GITHUB_OUTPUT
+              echo "Unknown tag format: $TAG_NAME"
+            fi
+          else
+            # Manual dispatch - build both
+            echo "is_core_release=true" >> $GITHUB_OUTPUT
+            echo "is_ui_release=true" >> $GITHUB_OUTPUT
+          fi
 
       - name: Get version from tag
         id: get-version
         run: |
           if [[ "${{ github.event_name }}" == "push" ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+            if [[ "$TAG_NAME" =~ ^v(.+)$ ]]; then
+              VERSION="${BASH_REMATCH[1]}"
+            elif [[ "$TAG_NAME" =~ ^ui-v(.+)$ ]]; then
+              VERSION="${BASH_REMATCH[1]}"
+            else
+              VERSION="$TAG_NAME"
+            fi
           else
             VERSION="${{ github.event.inputs.tag }}"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Detect changed packages
-        id: filter
-        uses: dorny/paths-filter@v2
-        with:
-          filters: |
-            core:
-              - 'packages/core/**'
-            ui:
-              - 'packages/ui/**'
-
   build-and-push-core:
-    needs: detect-changes
-    if: needs.detect-changes.outputs.core == 'true' || github.event_name == 'workflow_dispatch'
+    needs: detect-tag-type
+    if: needs.detect-tag-type.outputs.is_core_release == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -112,8 +130,13 @@ jobs:
           cache-to: type=gha,mode=max
 
   build-and-push-ui:
-    needs: [detect-changes, build-and-push-core]
-    if: needs.detect-changes.outputs.ui == 'true' || github.event_name == 'workflow_dispatch'
+    needs: [detect-tag-type, build-and-push-core]
+    if: |
+      always() && 
+      (needs.detect-tag-type.outputs.is_ui_release == 'true' || 
+       needs.detect-tag-type.outputs.is_core_release == 'true' || 
+       github.event_name == 'workflow_dispatch') &&
+      (needs.build-and-push-core.result == 'success' || needs.build-and-push-core.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -167,8 +190,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   comment-on-release:
-    needs: [build-and-push-core, build-and-push-ui]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [detect-tag-type, build-and-push-core, build-and-push-ui]
+    if: always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -185,23 +208,32 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const tagName = context.ref.replace('refs/tags/', '');
+            const isCore = tagName.match(/^v[0-9]+\.[0-9]+\.[0-9]+$/);
+            const isUI = tagName.match(/^ui-v[0-9]+\.[0-9]+\.[0-9]+$/);
 
-            // Find the release for this tag
-            const releases = await github.rest.repos.listReleases({
-              owner: context.repo.owner,
-              repo: context.repo.repo
-            });
-
-            const release = releases.data.find(r => r.tag_name === tagName);
-            if (!release) {
-              console.log(`No release found for tag ${tagName}`);
+            if (!isCore && !isUI) {
+              console.log(`Skipping comment for non-release tag: ${tagName}`);
               return;
             }
 
-            // Comment on the release
-            await github.rest.repos.updateRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: release.id,
-              body: release.body + '\\n\\n✅ Docker images have been successfully built and published.'
-            });
+            // Find the release for this tag (only for core releases)
+            if (isCore) {
+              const releases = await github.rest.repos.listReleases({
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+
+              const release = releases.data.find(r => r.tag_name === tagName);
+              if (!release) {
+                console.log(`No release found for tag ${tagName}`);
+                return;
+              }
+
+              // Comment on the release
+              await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: release.id,
+                body: release.body + '\n\n✅ Docker images have been successfully built and published.'
+              });
+            }

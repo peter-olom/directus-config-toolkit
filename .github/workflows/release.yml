@@ -48,8 +48,11 @@ jobs:
             ui:
               - 'packages/ui/**'
 
-  determine-version:
+  determine-core-version:
     needs: detect-changes
+    if: |
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.package == 'core' || github.event.inputs.package == 'both')) ||
+      (github.event_name == 'push' && needs.detect-changes.outputs.core_changed == 'true')
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.determine-version.outputs.version }}
@@ -58,11 +61,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Configure Git
-        run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "github-actions@github.com"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -106,42 +104,116 @@ jobs:
           cd packages/core
           CURRENT_VERSION=$(node -p "require('./package.json').version")
 
-          # For safety, handle version calculation manually
+          # Calculate new version
           if [ "$VERSION_TYPE" = "patch" ]; then
-            # Split version into parts
             MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
             MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
             PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
-            # Increment patch
             PATCH=$((PATCH + 1))
             NEW_VERSION="$MAJOR.$MINOR.$PATCH"
           elif [ "$VERSION_TYPE" = "minor" ]; then
             MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
             MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
-            # Increment minor, reset patch
             MINOR=$((MINOR + 1))
             NEW_VERSION="$MAJOR.$MINOR.0"
           elif [ "$VERSION_TYPE" = "major" ]; then
             MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
-            # Increment major, reset minor and patch
             MAJOR=$((MAJOR + 1))
             NEW_VERSION="$MAJOR.0.0"
           else
-            # If version_type is actually a specific version
             NEW_VERSION="$VERSION_TYPE"
           fi
 
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "Using version bump type: $VERSION_TYPE, new version will be: $NEW_VERSION"
+          echo "Core version bump: $VERSION_TYPE, new version: $NEW_VERSION"
+
+  determine-ui-version:
+    needs: detect-changes
+    if: |
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.package == 'ui' || github.event.inputs.package == 'both')) ||
+      (github.event_name == 'push' && needs.detect-changes.outputs.ui_changed == 'true' && needs.detect-changes.outputs.core_changed == 'false')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.determine-version.outputs.version }}
+      version_type: ${{ steps.determine-version.outputs.version_type }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Determine version type
+        id: version-type
+        if: github.event_name == 'push'
+        run: |
+          # Get the most recent commit message
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+
+          # Major: BREAKING CHANGE or "!:" in header
+          if [[ "$COMMIT_MSG" == *"BREAKING CHANGE"* || "$COMMIT_MSG" =~ ^.*!:.*$ ]]; then
+            echo "type=major" >> $GITHUB_OUTPUT
+          # Minor: any feat
+          elif [[ "$COMMIT_MSG" =~ ^feat ]]; then
+            echo "type=minor" >> $GITHUB_OUTPUT
+          else
+            echo "type=patch" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Commit message: $COMMIT_MSG"
+          echo "Determined version type: $(grep '^type=' $GITHUB_OUTPUT | cut -d= -f2)"
+
+      - name: Determine final version
+        id: determine-version
+        run: |
+          # Use the determined version type or the input from workflow dispatch
+          if [ "${{ github.event_name }}" == "push" ]; then
+            VERSION_TYPE="${{ steps.version-type.outputs.type }}"
+          else
+            VERSION_TYPE="${{ github.event.inputs.version_type }}"
+          fi
+
+          echo "version_type=$VERSION_TYPE" >> $GITHUB_OUTPUT
+
+          # Read current version from UI package.json
+          cd packages/ui
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+
+          # Calculate new version
+          if [ "$VERSION_TYPE" = "patch" ]; then
+            MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
+            MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
+            PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
+            PATCH=$((PATCH + 1))
+            NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          elif [ "$VERSION_TYPE" = "minor" ]; then
+            MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
+            MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
+            MINOR=$((MINOR + 1))
+            NEW_VERSION="$MAJOR.$MINOR.0"
+          elif [ "$VERSION_TYPE" = "major" ]; then
+            MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
+            MAJOR=$((MAJOR + 1))
+            NEW_VERSION="$MAJOR.0.0"
+          else
+            NEW_VERSION="$VERSION_TYPE"
+          fi
+
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "UI version bump: $VERSION_TYPE, new version: $NEW_VERSION"
 
   release-core:
-    needs: [detect-changes, determine-version]
+    needs: [detect-changes, determine-core-version]
     if: |
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.package == 'core' || github.event.inputs.package == 'both')) ||
       (github.event_name == 'push' && needs.detect-changes.outputs.core_changed == 'true')
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ needs.determine-version.outputs.version }}
+      version: ${{ needs.determine-core-version.outputs.version }}
     permissions:
       contents: write
       packages: write
@@ -172,7 +244,7 @@ jobs:
           cd packages/core
 
           # Use centrally determined version
-          VERSION="${{ needs.determine-version.outputs.version }}"
+          VERSION="${{ needs.determine-core-version.outputs.version }}"
 
           # Store original version for potential rollback
           ORIGINAL_VERSION=$(node -p "require('./package.json').version")
@@ -198,7 +270,7 @@ jobs:
       - name: Commit and push version
         id: git-push
         run: |
-          VERSION="${{ needs.determine-version.outputs.version }}"
+          VERSION="${{ needs.determine-core-version.outputs.version }}"
 
           git commit -m "chore(core): release v$VERSION"
           git tag -a "v$VERSION" -m "Core v$VERSION"
@@ -221,22 +293,22 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ needs.determine-version.outputs.version }}
+          tag_name: v${{ needs.determine-core-version.outputs.version }}
           generate_release_notes: true
           draft: false
           body: |
-            ## Core Package v${{ needs.determine-version.outputs.version }}
+            ## Core Package v${{ needs.determine-core-version.outputs.version }}
 
             This release includes updates to the core package. Docker images are automatically built and published by the `Build and Publish Docker Images` workflow.
 
             ### NPM Package
             ```
-            npm install @devrue/directus-config-toolkit@${{ needs.determine-version.outputs.version }}
+            npm install @devrue/directus-config-toolkit@${{ needs.determine-core-version.outputs.version }}
             ```
 
             ### Docker Image
             ```
-            docker pull ghcr.io/${{ github.repository }}:${{ needs.determine-version.outputs.version }}
+            docker pull ghcr.io/${{ github.repository }}:${{ needs.determine-core-version.outputs.version }}
             ```
 
       # Rollback on failure
@@ -245,7 +317,7 @@ jobs:
         run: |
           echo "::warning::Build or publish failed after git operations. Attempting rollback..."
 
-          VERSION="${{ needs.determine-version.outputs.version }}"
+          VERSION="${{ needs.determine-core-version.outputs.version }}"
 
           # Delete the remote tag if it was pushed
           git push --delete origin "v$VERSION" || echo "Remote tag deletion failed or tag wasn't pushed"
@@ -263,13 +335,13 @@ jobs:
           exit 1
 
   release-ui:
-    needs: [detect-changes, determine-version, release-core]
+    needs: [detect-changes, determine-ui-version]
     if: |
-      (github.event_name == 'workflow_dispatch' && (github.event.inputs.package == 'ui' || github.event.inputs.package == 'both')) ||
-      (github.event_name == 'push' && needs.detect-changes.outputs.ui_changed == 'true')
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.package == 'ui') ||
+      (github.event_name == 'push' && needs.detect-changes.outputs.ui_changed == 'true' && needs.detect-changes.outputs.core_changed == 'false')
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ needs.determine-version.outputs.version }}
+      version: ${{ needs.determine-ui-version.outputs.version }}
     permissions:
       contents: write
       packages: write
@@ -278,14 +350,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # Ensure we have the latest including the core tag
-          ref: main
 
       - name: Configure Git
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "github-actions@github.com"
-          git pull
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -295,25 +364,51 @@ jobs:
 
       - run: npm ci
 
-      # Update UI package.json
-      - name: Update UI version
-        id: version-bump-ui
+      - name: Update UI version locally
+        id: version-update
         run: |
           cd packages/ui
+          VERSION="${{ needs.determine-ui-version.outputs.version }}"
 
-          # Use centrally determined version
-          VERSION="${{ needs.determine-version.outputs.version }}"
-
-          # Update package.json
+          # Update package.json locally only
           npm version $VERSION --no-git-tag-version
-
-          # Track changes
           git add package.json
-          git commit -m "chore(ui): bump version to $VERSION"
 
-          # Try to push with error handling
-          if ! git push; then
-            echo "::error::Failed to push UI version update. Attempting rollback..."
-            git reset --hard HEAD~1
-            exit 1
-          fi
+      - name: Commit and push UI version with tag
+        id: git-push
+        run: |
+          VERSION="${{ needs.determine-ui-version.outputs.version }}"
+
+          # Commit the version bump
+          git commit -m "chore(ui): release v$VERSION"
+
+          # Create UI-specific tag
+          git tag -a "ui-v$VERSION" -m "UI v$VERSION"
+
+          # Push commit and tags
+          git push
+          git push --tags
+
+          echo "git_operations_completed=true" >> $GITHUB_OUTPUT
+
+      - name: Rollback on failure
+        if: failure() && steps.git-push.outputs.git_operations_completed == 'true'
+        run: |
+          echo "::warning::UI release failed after git operations. Attempting rollback..."
+
+          VERSION="${{ needs.determine-ui-version.outputs.version }}"
+
+          # Delete the remote tag if it was pushed
+          git push --delete origin "ui-v$VERSION" || echo "Remote tag deletion failed"
+
+          # Delete local tag
+          git tag -d "ui-v$VERSION" || echo "Local tag deletion failed"
+
+          # Reset to previous commit
+          git reset --hard HEAD~1
+
+          # Force push to revert
+          git push --force-with-lease || echo "Force push failed"
+
+          echo "::error::UI rollback completed."
+          exit 1
