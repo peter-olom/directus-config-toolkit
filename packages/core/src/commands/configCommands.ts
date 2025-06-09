@@ -1,8 +1,9 @@
 // Export/import commands for configuration types (schema, roles, settings, files, flows)
 import { Command } from "commander";
 import { ConfigType } from "../types/generic";
-import { printConfig } from "../helper";
+import { printConfig, callDirectusAPI } from "../helper";
 import { managers, BaseManager, validateType } from "../utils/supportedTypes";
+import { addBackupFieldToCollections } from "../utils/addBackupField";
 
 const SYNC_SEQUENCE: ConfigType[] = [
   "schema",
@@ -155,6 +156,38 @@ export function registerConfigCommands(program: Command) {
         process.exit(1);
       } else {
         console.log("\nAll imports completed successfully");
+      }
+    });
+
+  program
+    .command("add-backup-field")
+    .description(
+      "Add backup field (should_backup) to directus_files and directus_folders collections"
+    )
+    .option(
+      "--field-name <name>",
+      "Name for the backup field (must be 'shouldBackup' or 'should_backup')",
+      "should_backup"
+    )
+    .option("--dry-run", "Preview the changes without applying them")
+    .action(async (options) => {
+      try {
+        if (
+          options.fieldName !== "shouldBackup" &&
+          options.fieldName !== "should_backup"
+        ) {
+          console.error(
+            "Error: --field-name must be either 'shouldBackup' or 'should_backup'."
+          );
+          process.exit(1);
+        }
+        await addBackupFieldToCollections({
+          fieldName: options.fieldName,
+          dryRun: options.dryRun,
+        });
+      } catch (error) {
+        console.error("Failed to add backup field:", error);
+        process.exit(1);
       }
     });
 }

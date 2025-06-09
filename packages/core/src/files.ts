@@ -18,9 +18,7 @@ import {
 } from "./helper";
 import _ from "lodash";
 import FormData from "form-data";
-import { v4 as uuidv4 } from "uuid";
 import { AuditManager } from "./audit";
-import { ConfigType } from "./types/generic";
 
 export class FilesManager {
   private filePath: string = join(CONFIG_PATH, "files.json");
