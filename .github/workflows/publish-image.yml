@@ -101,8 +101,8 @@ jobs:
       - name: Build and push Core Docker image
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: ./packages/core/dockerfile
+          context: ./packages/core
+          file: dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
