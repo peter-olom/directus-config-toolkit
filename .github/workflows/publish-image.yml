@@ -11,6 +11,13 @@ on:
         description: "Tag to build (default: latest)"
         required: false
         default: "latest"
+  # Add workflow_run trigger to ensure it fires after release workflow
+  workflow_run:
+    workflows: ["Version and Publish Packages"]
+    types:
+      - completed
+    branches:
+      - main
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -32,7 +39,41 @@ jobs:
       is_core_release: ${{ steps.check-tag.outputs.is_core_release }}
       is_ui_release: ${{ steps.check-tag.outputs.is_ui_release }}
       version: ${{ steps.get-version.outputs.version }}
+      triggered_by_workflow_run: ${{ steps.check-trigger.outputs.triggered_by_workflow_run }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check trigger type
+        id: check-trigger
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            echo "triggered_by_workflow_run=true" >> $GITHUB_OUTPUT
+            echo "Triggered by workflow_run event"
+            
+            # Get the latest tag
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            echo "Latest tag: $LATEST_TAG"
+            
+            if [[ "$LATEST_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "is_core_release=true" >> $GITHUB_OUTPUT
+              echo "is_ui_release=false" >> $GITHUB_OUTPUT
+              echo "Core release detected from workflow_run: $LATEST_TAG"
+            elif [[ "$LATEST_TAG" =~ ^ui-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "is_core_release=false" >> $GITHUB_OUTPUT
+              echo "is_ui_release=true" >> $GITHUB_OUTPUT
+              echo "UI release detected from workflow_run: $LATEST_TAG"
+            else
+              echo "is_core_release=false" >> $GITHUB_OUTPUT
+              echo "is_ui_release=false" >> $GITHUB_OUTPUT
+              echo "No valid release tag found: $LATEST_TAG"
+            fi
+          else
+            echo "triggered_by_workflow_run=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Check tag type
         id: check-tag
         run: |
@@ -52,7 +93,7 @@ jobs:
               echo "is_ui_release=false" >> $GITHUB_OUTPUT
               echo "Unknown tag format: $TAG_NAME"
             fi
-          else
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             # Manual dispatch - build both
             echo "is_core_release=true" >> $GITHUB_OUTPUT
             echo "is_ui_release=true" >> $GITHUB_OUTPUT
@@ -70,10 +111,21 @@ jobs:
             else
               VERSION="$TAG_NAME"
             fi
+          elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            # Get version from the latest tag
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "latest")
+            if [[ "$LATEST_TAG" =~ ^v(.+)$ ]]; then
+              VERSION="${BASH_REMATCH[1]}"
+            elif [[ "$LATEST_TAG" =~ ^ui-v(.+)$ ]]; then
+              VERSION="${BASH_REMATCH[1]}"
+            else
+              VERSION="$LATEST_TAG"
+            fi
           else
-            VERSION="${{ github.event.inputs.tag }}"
+            VERSION="${{ github.event.inputs.tag || 'latest' }}"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Determined version: $VERSION"
 
   build-and-push-core:
     needs: detect-tag-type
@@ -116,6 +168,7 @@ jobs:
             type=ref,event=branch
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.detect-tag-type.outputs.version }},enable=${{ github.event_name == 'workflow_run' }}
             type=raw,value=${{ github.event.inputs.tag || 'latest' }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push Core Docker image
@@ -175,6 +228,7 @@ jobs:
             type=ref,event=branch
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.detect-tag-type.outputs.version }},enable=${{ github.event_name == 'workflow_run' }}
             type=raw,value=${{ github.event.inputs.tag || 'latest' }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push UI Docker image
