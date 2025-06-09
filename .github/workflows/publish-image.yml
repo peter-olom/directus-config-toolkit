@@ -36,8 +36,8 @@ jobs:
   detect-tag-type:
     runs-on: ubuntu-latest
     outputs:
-      is_core_release: ${{ steps.check-tag.outputs.is_core_release }}
-      is_ui_release: ${{ steps.check-tag.outputs.is_ui_release }}
+      is_core_release: ${{ steps.check-trigger.outputs.is_core_release || steps.check-tag.outputs.is_core_release }}
+      is_ui_release: ${{ steps.check-trigger.outputs.is_ui_release || steps.check-tag.outputs.is_ui_release }}
       version: ${{ steps.get-version.outputs.version }}
       triggered_by_workflow_run: ${{ steps.check-trigger.outputs.triggered_by_workflow_run }}
     steps:
@@ -52,6 +52,14 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
             echo "triggered_by_workflow_run=true" >> $GITHUB_OUTPUT
             echo "Triggered by workflow_run event"
+            
+            # Check if the triggering workflow was successful
+            if [[ "${{ github.event.workflow_run.conclusion }}" != "success" ]]; then
+              echo "Triggering workflow was not successful: ${{ github.event.workflow_run.conclusion }}"
+              echo "is_core_release=false" >> $GITHUB_OUTPUT
+              echo "is_ui_release=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
             
             # Get the latest tag
             LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
@@ -169,6 +177,7 @@ jobs:
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=${{ needs.detect-tag-type.outputs.version }},enable=${{ github.event_name == 'workflow_run' }}
+            type=raw,value=v${{ needs.detect-tag-type.outputs.version }},enable=${{ github.event_name == 'workflow_run' && needs.detect-tag-type.outputs.is_core_release == 'true' }}
             type=raw,value=${{ github.event.inputs.tag || 'latest' }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push Core Docker image
@@ -229,6 +238,8 @@ jobs:
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=${{ needs.detect-tag-type.outputs.version }},enable=${{ github.event_name == 'workflow_run' }}
+            type=raw,value=v${{ needs.detect-tag-type.outputs.version }},enable=${{ github.event_name == 'workflow_run' && needs.detect-tag-type.outputs.is_core_release == 'true' }}
+            type=raw,value=ui-v${{ needs.detect-tag-type.outputs.version }},enable=${{ github.event_name == 'workflow_run' && needs.detect-tag-type.outputs.is_ui_release == 'true' }}
             type=raw,value=${{ github.event.inputs.tag || 'latest' }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push UI Docker image
@@ -245,7 +256,13 @@ jobs:
 
   comment-on-release:
     needs: [detect-tag-type, build-and-push-core, build-and-push-ui]
-    if: always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    if: |
+      always() && 
+      needs.detect-tag-type.outputs.is_core_release == 'true' &&
+      (needs.build-and-push-core.result == 'success' || needs.build-and-push-core.result == 'skipped') &&
+      (needs.build-and-push-ui.result == 'success' || needs.build-and-push-ui.result == 'skipped') &&
+      ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || 
+       github.event_name == 'workflow_run')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -261,7 +278,32 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const tagName = context.ref.replace('refs/tags/', '');
+            let tagName;
+
+            // Determine tag name based on event type
+            if (context.eventName === 'push') {
+              tagName = context.ref.replace('refs/tags/', '');
+            } else if (context.eventName === 'workflow_run') {
+              // For workflow_run, construct tag name from detected version
+              const version = '${{ needs.detect-tag-type.outputs.version }}';
+              const isCore = '${{ needs.detect-tag-type.outputs.is_core_release }}' === 'true';
+              const isUI = '${{ needs.detect-tag-type.outputs.is_ui_release }}' === 'true';
+              
+              if (isCore) {
+                tagName = `v${version}`;
+              } else if (isUI) {
+                tagName = `ui-v${version}`;
+              } else {
+                console.log('No valid release type detected for workflow_run');
+                return;
+              }
+            } else {
+              console.log(`Unsupported event type for commenting: ${context.eventName}`);
+              return;
+            }
+
+            console.log(`Processing tag: ${tagName}`);
+
             const isCore = tagName.match(/^v[0-9]+\.[0-9]+\.[0-9]+$/);
             const isUI = tagName.match(/^ui-v[0-9]+\.[0-9]+\.[0-9]+$/);
 
@@ -290,4 +332,6 @@ jobs:
                 release_id: release.id,
                 body: release.body + '\n\n✅ Docker images have been successfully built and published.'
               });
+              
+              console.log(`Successfully commented on release ${tagName}`);
             }
