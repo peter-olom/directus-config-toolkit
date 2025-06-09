@@ -166,27 +166,22 @@ jobs:
 
       - run: npm ci
 
-      - name: Bump version and push tag
-        id: version-bump
+      - name: Update version locally
+        id: version-update
         run: |
           cd packages/core
 
           # Use centrally determined version
           VERSION="${{ needs.determine-version.outputs.version }}"
 
-          # Update package.json with exact version number
+          # Store original version for potential rollback
+          ORIGINAL_VERSION=$(node -p "require('./package.json').version")
+          echo "original_version=$ORIGINAL_VERSION" >> $GITHUB_OUTPUT
+          echo "new_version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Update package.json with exact version number (locally only)
           npm version $VERSION --no-git-tag-version
           git add package.json
-          git commit -m "chore(core): release v$VERSION"
-          git tag -a "v$VERSION" -m "Core v$VERSION"
-
-          # Try to push with error handling
-          if ! git push && ! git push --tags; then
-            echo "::error::Failed to push to repository. Attempting rollback..."
-            git tag -d "v$VERSION"
-            git reset --hard HEAD~1
-            exit 1
-          fi
 
       # Copy README to core package
       - name: Copy README to core package
@@ -198,6 +193,21 @@ jobs:
         run: |
           cd packages/core
           npm run build
+
+      # All validations passed - now commit and push
+      - name: Commit and push version
+        id: git-push
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+
+          git commit -m "chore(core): release v$VERSION"
+          git tag -a "v$VERSION" -m "Core v$VERSION"
+
+          # Push commit and tags
+          git push
+          git push --tags
+
+          echo "git_operations_completed=true" >> $GITHUB_OUTPUT
 
       # Publish to NPM
       - name: Publish to NPM
@@ -228,6 +238,29 @@ jobs:
             ```
             docker pull ghcr.io/${{ github.repository }}:${{ needs.determine-version.outputs.version }}
             ```
+
+      # Rollback on failure
+      - name: Rollback on failure
+        if: failure() && steps.git-push.outputs.git_operations_completed == 'true'
+        run: |
+          echo "::warning::Build or publish failed after git operations. Attempting rollback..."
+
+          VERSION="${{ needs.determine-version.outputs.version }}"
+
+          # Delete the remote tag if it was pushed
+          git push --delete origin "v$VERSION" || echo "Remote tag deletion failed or tag wasn't pushed"
+
+          # Delete local tag
+          git tag -d "v$VERSION" || echo "Local tag deletion failed"
+
+          # Reset to previous commit (before version bump)
+          git reset --hard HEAD~1
+
+          # Force push to revert the commit (if it was pushed)
+          git push --force-with-lease || echo "Force push failed or commit wasn't pushed"
+
+          echo "::error::Rollback completed. The version bump has been reverted."
+          exit 1
 
   release-ui:
     needs: [detect-changes, determine-version, release-core]
