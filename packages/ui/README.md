@@ -1,4 +1,4 @@
-# <img src="../../dct-logo.png" alt="DCT Logo" width="40" height="50" style="vertical-align:middle;"> Directus Config Toolkit UI
+# <img src="https://raw.githubusercontent.com/peter-olom/directus-config-toolkit/31ce87446f86d85deb691454a4b9544f8ba5d4d2/dct-logo.png" alt="DCT Logo" width="40" height="50" style="vertical-align:middle;"> Directus Config Toolkit UI
 
 This package provides the web dashboard for the Directus Config Toolkit (DCT), offering a modern, intuitive interface for managing Directus configurations across environments.
 

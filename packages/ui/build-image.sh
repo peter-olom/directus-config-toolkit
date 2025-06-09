@@ -24,7 +24,7 @@ cd $(dirname "$0")/../..
 echo "Building directus-config-toolkit-ui:$TAG from monorepo root..."
 
 # Build the Docker image with the correct context
-docker build -t directus-config-toolkit-ui:$TAG -f packages/ui/Dockerfile .
+docker build -t ghcr.io/peter-olom/directus-config-toolkit-ui:$TAG -f packages/ui/Dockerfile .
 
 echo "Build complete! Image is available as directus-config-toolkit-ui:$TAG"
 echo ""

@@ -188,6 +188,11 @@ jobs:
             exit 1
           fi
 
+      # Copy README to core package
+      - name: Copy README to core package
+        run: |
+          cp README.md packages/core/README.md
+
       # Build packages
       - name: Build core package
         run: |

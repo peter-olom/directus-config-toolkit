@@ -1,4 +1,4 @@
-# <img src="./dct-logo.png" alt="DCT Logo" width="48" height="60" style="vertical-align:middle;"> Directus Config Toolkit – Development Guide
+# <img src="https://raw.githubusercontent.com/peter-olom/directus-config-toolkit/31ce87446f86d85deb691454a4b9544f8ba5d4d2/dct-logo.png" alt="DCT Logo" width="48" height="60" style="vertical-align:middle;"> Directus Config Toolkit – Development Guide
 
 Welcome to the development guide for the Directus Config Toolkit (DCT)! This document will help you set up, develop, and contribute to the DCT dashboard and core packages.
 

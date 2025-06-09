@@ -1,4 +1,4 @@
-# <img src="./dct-logo.png" alt="DCT Logo" width="48" height="60" style="vertical-align:middle;"> Directus Config Toolkit (DCT)
+# <img src="https://raw.githubusercontent.com/peter-olom/directus-config-toolkit/31ce87446f86d85deb691454a4b9544f8ba5d4d2/dct-logo.png" alt="DCT Logo" width="48" height="60" style="vertical-align:middle;"> Directus Config Toolkit (DCT)
 
 Directus Config Toolkit is a utility for managing Directus configurations across environments. It provides robust tools for exporting, importing, and versioning your Directus instance configurations, making it easier to implement DevOps practices with Directus.
 
@@ -60,7 +60,7 @@ DCT_AUDIT_RETENTION_DAYS=30        # Days to keep audit snapshots
 
 # If Using the UI
 AUTH_SECRET=random-secret-used-by-next-auth
-AUTH_TRUST_HOST=true # Use this if you run into untrusted host issues
+AUTH_TRUST_HOST=true # Use this if you run into - UntrustedHost: Host must be trusted. URL was: http://localhost:PORT/api/auth/session. Read more at https://errors.authjs.dev#untrustedhost
 DCT_UI_URL=http://localhost:3000
 DCT_UI_USERNAME=admin
 DCT_UI_PASSWORD=bcrypt-hash-string # DCT can generate this for you
@@ -237,10 +237,6 @@ npm run dev
 ```
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for more detailed development instructions.
-
-## License
-
-MIT License. See the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgements
 
