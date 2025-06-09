@@ -269,10 +269,8 @@ jobs:
           # Update package.json
           npm version $VERSION --no-git-tag-version
 
-          # Update dependencies to use exact core version
-          npm install --save-exact @devrue/directus-config-toolkit@$VERSION
-
-          git add package.json package-lock.json
+          # Track changes
+          git add package.json
           git commit -m "chore(ui): bump version to $VERSION"
 
           # Try to push with error handling
