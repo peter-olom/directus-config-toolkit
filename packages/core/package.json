@@ -18,8 +18,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsup",
-    "dev": "tsup --watch",
-    "release": "release-it"
+    "dev": "tsup --watch"
   },
   "keywords": [],
   "author": "Peter Olom",
@@ -42,14 +41,12 @@
     "uuid": "^11.1.0"
   },
   "devDependencies": {
-    "@release-it/conventional-changelog": "^9.0.3",
     "@types/express": "^5.0.1",
     "@types/fs-extra": "^11.0.4",
     "@types/lodash": "^4.17.13",
     "@types/uuid": "^10.0.0",
     "concurrently": "^8.2.2",
     "nodemon": "^3.0.3",
-    "release-it": "^17.10.0",
     "ts-node": "^10.9.2",
     "tsup": "^7.2.0",
     "typescript": "^5.0.0"
@@ -64,22 +61,5 @@
   "homepage": "https://github.com/peter-olom/directus-config-toolkit#readme",
   "engines": {
     "node": ">=18.0.0"
-  },
-  "release-it": {
-    "git": {
-      "commitMessage": "chore: release ${version}",
-      "tagName": "v${version}"
-    },
-    "npm": {
-      "publish": true
-    },
-    "github": {
-      "release": true
-    },
-    "plugins": {
-      "@release-it/conventional-changelog": {
-        "preset": "angular"
-      }
-    }
   }
 }

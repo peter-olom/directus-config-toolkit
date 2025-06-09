@@ -1,0 +1,240 @@
+name: Version and Publish Packages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: "Type of version bump"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      package:
+        description: "Package to release"
+        required: true
+        type: choice
+        options:
+          - core
+          - ui
+          - both
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      core_changed: ${{ steps.filter.outputs.core }}
+      ui_changed: ${{ steps.filter.outputs.ui }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            core:
+              - 'packages/core/**'
+            ui:
+              - 'packages/ui/**'
+
+  release-core:
+    needs: detect-changes
+    if: |
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.package == 'core' || github.event.inputs.package == 'both')) ||
+      (github.event_name == 'push' && needs.detect-changes.outputs.core_changed == 'true')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version-bump.outputs.version }}
+    permissions:
+      contents: write
+      packages: write
+      id-token: write # For NPM provenance
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "github-actions@github.com"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+
+      - run: npm ci
+
+      # Bump version and create tag
+      - name: Determine version bump type
+        id: version-type
+        if: github.event_name == 'push'
+        run: |
+          # Get the most recent commit message
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+
+          # Determine version bump type based on conventional commits
+          if [[ "$COMMIT_MSG" =~ ^feat(\([^)]+\))?!:.*$ || "$COMMIT_MSG" =~ ^BREAKING[[:space:]]CHANGE:.*$ ]]; then
+            echo "type=major" >> $GITHUB_OUTPUT
+          elif [[ "$COMMIT_MSG" =~ ^feat(\([^)]+\))?:.*$ ]]; then
+            echo "type=minor" >> $GITHUB_OUTPUT
+          else
+            echo "type=patch" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Commit message: $COMMIT_MSG"
+          echo "Determined version type: $(cat $GITHUB_OUTPUT | grep type | cut -d= -f2)"
+
+      - name: Bump version and push tag
+        id: version-bump
+        run: |
+          cd packages/core
+
+          # Use the determined version type or the input from workflow dispatch
+          if [ "${{ github.event_name }}" == "push" ]; then
+            VERSION_TYPE="${{ steps.version-type.outputs.type }}"
+          else
+            VERSION_TYPE="${{ github.event.inputs.version_type }}"
+          fi
+
+          echo "Using version bump type: $VERSION_TYPE"
+
+          npm version $VERSION_TYPE -m "chore: release %s"
+          echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+          git push --follow-tags
+
+      # Build packages
+      - name: Build core package
+        run: |
+          cd packages/core
+          npm run build
+
+      # Publish to NPM
+      - name: Publish to NPM
+        run: |
+          cd packages/core
+          npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Create GitHub Release
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version-bump.outputs.version }}
+          generate_release_notes: true
+          # Only create a release when running through the automated push process
+          # or when explicitly releasing via workflow_dispatch
+          draft: false
+          body: |
+            ## Core Package v${{ steps.version-bump.outputs.version }}
+
+            This release includes updates to the core package. Docker images are automatically built and published by the `Build and Publish Docker Images` workflow.
+
+            ### NPM Package
+            ```
+            npm install @devrue/directus-config-toolkit@${{ steps.version-bump.outputs.version }}
+            ```
+
+            ### Docker Image
+            ```
+            docker pull ghcr.io/${{ github.repository }}:${{ steps.version-bump.outputs.version }}
+            ```
+
+  release-ui:
+    needs: detect-changes
+    if: |
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.package == 'ui' || github.event.inputs.package == 'both')) ||
+      (github.event_name == 'push' && needs.detect-changes.outputs.ui_changed == 'true')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version-bump-ui.outputs.version }}
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "github-actions@github.com"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - run: npm ci
+
+      # Bump version of UI package
+      - name: Determine version bump type for UI
+        id: version-type-ui
+        if: github.event_name == 'push'
+        run: |
+          # Get the most recent commit message
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+
+          # Determine version bump type based on conventional commits
+          if [[ "$COMMIT_MSG" =~ ^feat(\([^)]+\))?!:.*$ || "$COMMIT_MSG" =~ ^BREAKING[[:space:]]CHANGE:.*$ ]]; then
+            echo "type=major" >> $GITHUB_OUTPUT
+          elif [[ "$COMMIT_MSG" =~ ^feat(\([^)]+\))?:.*$ ]]; then
+            echo "type=minor" >> $GITHUB_OUTPUT
+          else
+            echo "type=patch" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Commit message: $COMMIT_MSG"
+          echo "Determined version type: $(cat $GITHUB_OUTPUT | grep type | cut -d= -f2)"
+
+      - name: Bump UI version
+        id: version-bump-ui
+        run: |
+          cd packages/ui
+
+          # Use the determined version type
+          if [ "${{ github.event_name }}" == "push" ]; then
+            VERSION_TYPE="${{ steps.version-type-ui.outputs.type }}"
+          else
+            VERSION_TYPE="${{ github.event.inputs.version_type }}"
+          fi
+
+          # Update version without creating a tag
+          npm version $VERSION_TYPE --no-git-tag-version
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Commit the change
+          git add package.json
+          git commit -m "chore(ui): bump version to $VERSION"
+
+          # Push the changes (but no tag)
+          git push origin HEAD:${{ github.ref_name }}
+
+      # Build UI package
+      - name: Build UI package
+        run: |
+          cd packages/ui
+          npm run build
+
+  # Note: Docker image building and publishing is handled by the publish-image.yml workflow
+  # which is triggered automatically when this workflow creates a new tag
