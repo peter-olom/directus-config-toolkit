@@ -2,6 +2,13 @@
 
 Directus Config Toolkit is a utility for managing Directus configurations across environments. It provides robust tools for exporting, importing, and versioning your Directus instance configurations, making it easier to implement DevOps practices with Directus.
 
+<div align="center">
+
+| <img src="https://raw.githubusercontent.com/peter-olom/directus-config-toolkit/56424f1fd6f6092ea6d5eb50e52ce3ba5daf4e32/timemachine-ui.png" width="600px" /> | <img src="https://raw.githubusercontent.com/peter-olom/directus-config-toolkit/56424f1fd6f6092ea6d5eb50e52ce3ba5daf4e32/menu-cli.png" width="500px" /> |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+
+</div>
+
 ## Features
 
 - **Export & Import**: Easily backup and restore Directus configurations including flows, roles, settings, files, and schema
@@ -31,6 +38,10 @@ npm install -g @devrue/directus-config-toolkit
 # Or use with npx
 npx @devrue/directus-config-toolkit [command]
 ```
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/peter-olom/directus-config-toolkit/56424f1fd6f6092ea6d5eb50e52ce3ba5daf4e32/timemachine-cli.png" width="800px" />
+</div>
 
 ### Docker
 
@@ -151,6 +162,10 @@ docker run -p 3000:3000 \
   -v $(pwd)/audit:/app/audit \
   ghcr.io/peter-olom/directus-config-toolkit-ui:latest
 ```
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/peter-olom/directus-config-toolkit/56424f1fd6f6092ea6d5eb50e52ce3ba5daf4e32/import-diff-ui.png" width="800px" />
+</div>
 
 The dashboard provides:
 
