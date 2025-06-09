@@ -2,7 +2,7 @@ node_modules
 dist
 .git
 .gitignore
-dockerfile
+Dockerfile
 .dockerignore
 .github
 config

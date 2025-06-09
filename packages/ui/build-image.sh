@@ -3,7 +3,7 @@
 # Convenience script for building the UI Docker image
 # 
 # This script builds the UI Docker image from the monorepo root,
-# which is required because the dockerfile needs access to both
+# which is required because the Dockerfile needs access to both
 # the core and UI packages.
 #
 # Usage:
@@ -24,7 +24,7 @@ cd $(dirname "$0")/../..
 echo "Building directus-config-toolkit-ui:$TAG from monorepo root..."
 
 # Build the Docker image with the correct context
-docker build -t directus-config-toolkit-ui:$TAG -f packages/ui/dockerfile .
+docker build -t directus-config-toolkit-ui:$TAG -f packages/ui/Dockerfile .
 
 echo "Build complete! Image is available as directus-config-toolkit-ui:$TAG"
 echo ""
