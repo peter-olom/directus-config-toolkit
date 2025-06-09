@@ -7,7 +7,7 @@ export default async function LoginPage() {
   const session = await auth();
   const { core, ui } = await getVersions();
 
-  if (session) {
+  if (session?.user) {
     redirect("/");
   }
   return <LoginForm corePackageVersion={core} uiPackageVersion={ui} />;
