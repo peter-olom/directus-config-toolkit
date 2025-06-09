@@ -4,7 +4,7 @@ node_modules
 dist
 *.log
 npm-debug.log
-Dockerfile
+dockerfile
 .dockerignore
 .env*
 coverage

@@ -48,14 +48,82 @@ jobs:
             ui:
               - 'packages/ui/**'
 
-  release-core:
+  determine-version:
     needs: detect-changes
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.determine-version.outputs.version }}
+      version_type: ${{ steps.determine-version.outputs.version_type }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "github-actions@github.com"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - name: Determine version type
+        id: version-type
+        if: github.event_name == 'push'
+        run: |
+          # Get the most recent commit message
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+
+          # Major: BREAKING CHANGE or "!:" in header
+          if [[ "$COMMIT_MSG" == *"BREAKING CHANGE"* || "$COMMIT_MSG" =~ ^.*!:.*$ ]]; then
+            echo "type=major" >> $GITHUB_OUTPUT
+          # Minor: any feat
+          elif [[ "$COMMIT_MSG" =~ ^feat ]]; then
+            echo "type=minor" >> $GITHUB_OUTPUT
+          else
+            echo "type=patch" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Commit message: $COMMIT_MSG"
+          echo "Determined version type: $(grep '^type=' $GITHUB_OUTPUT | cut -d= -f2)"
+
+      - name: Determine final version
+        id: determine-version
+        run: |
+          # Use the determined version type or the input from workflow dispatch
+          if [ "${{ github.event_name }}" == "push" ]; then
+            VERSION_TYPE="${{ steps.version-type.outputs.type }}"
+          else
+            VERSION_TYPE="${{ github.event.inputs.version_type }}"
+          fi
+
+          echo "version_type=$VERSION_TYPE" >> $GITHUB_OUTPUT
+
+          # Read current version from core package.json
+          cd packages/core
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+
+          # Calculate new version using npm's semver utility
+          NEW_VERSION=$(npm --no-git-tag-version version $VERSION_TYPE)
+          NEW_VERSION=${NEW_VERSION#v}
+
+          # Reset the change (we don't want to commit yet)
+          git checkout -- package.json
+
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "Using version bump type: $VERSION_TYPE, new version will be: $NEW_VERSION"
+
+  release-core:
+    needs: [detect-changes, determine-version]
     if: |
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.package == 'core' || github.event.inputs.package == 'both')) ||
       (github.event_name == 'push' && needs.detect-changes.outputs.core_changed == 'true')
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version-bump.outputs.version }}
+      version: ${{ needs.determine-version.outputs.version }}
     permissions:
       contents: write
       packages: write
@@ -80,44 +148,27 @@ jobs:
 
       - run: npm ci
 
-      # Bump version and create tag
-      - name: Determine version bump type
-        id: version-type
-        if: github.event_name == 'push'
-        run: |
-          # Get the most recent commit message
-          COMMIT_MSG=$(git log -1 --pretty=%B)
-
-          # Major: BREAKING CHANGE or "!:" in header
-          if [[ "$COMMIT_MSG" == *"BREAKING CHANGE"* || "$COMMIT_MSG" =~ ^.*!:.*$ ]]; then
-            echo "type=major" >> $GITHUB_OUTPUT
-          # Minor: any feat
-          elif [[ "$COMMIT_MSG" =~ ^feat ]]; then
-            echo "type=minor" >> $GITHUB_OUTPUT
-          else
-            echo "type=patch" >> $GITHUB_OUTPUT
-          fi
-
-          echo "Commit message: $COMMIT_MSG"
-          echo "Determined version type: $(grep '^type=' $GITHUB_OUTPUT | cut -d= -f2)"
-
       - name: Bump version and push tag
         id: version-bump
         run: |
           cd packages/core
 
-          # Use the determined version type or the input from workflow dispatch
-          if [ "${{ github.event_name }}" == "push" ]; then
-            VERSION_TYPE="${{ steps.version-type.outputs.type }}"
-          else
-            VERSION_TYPE="${{ github.event.inputs.version_type }}"
+          # Use centrally determined version
+          VERSION="${{ needs.determine-version.outputs.version }}"
+
+          # Update package.json with exact version number
+          npm version $VERSION --no-git-tag-version
+          git add package.json
+          git commit -m "chore(core): release v$VERSION"
+          git tag -a "v$VERSION" -m "Core v$VERSION"
+
+          # Try to push with error handling
+          if ! git push && ! git push --tags; then
+            echo "::error::Failed to push to repository. Attempting rollback..."
+            git tag -d "v$VERSION"
+            git reset --hard HEAD~1
+            exit 1
           fi
-
-          echo "Using version bump type: $VERSION_TYPE"
-
-          npm version $VERSION_TYPE -m "chore: release %s"
-          echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
-          git push --follow-tags
 
       # Build packages
       - name: Build core package
@@ -137,34 +188,32 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ steps.version-bump.outputs.version }}
+          tag_name: v${{ needs.determine-version.outputs.version }}
           generate_release_notes: true
-          # Only create a release when running through the automated push process
-          # or when explicitly releasing via workflow_dispatch
           draft: false
           body: |
-            ## Core Package v${{ steps.version-bump.outputs.version }}
+            ## Core Package v${{ needs.determine-version.outputs.version }}
 
             This release includes updates to the core package. Docker images are automatically built and published by the `Build and Publish Docker Images` workflow.
 
             ### NPM Package
             ```
-            npm install @devrue/directus-config-toolkit@${{ steps.version-bump.outputs.version }}
+            npm install @devrue/directus-config-toolkit@${{ needs.determine-version.outputs.version }}
             ```
 
             ### Docker Image
             ```
-            docker pull ghcr.io/${{ github.repository }}:${{ steps.version-bump.outputs.version }}
+            docker pull ghcr.io/${{ github.repository }}:${{ needs.determine-version.outputs.version }}
             ```
 
   release-ui:
-    needs: detect-changes
+    needs: [detect-changes, determine-version, release-core]
     if: |
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.package == 'ui' || github.event.inputs.package == 'both')) ||
       (github.event_name == 'push' && needs.detect-changes.outputs.ui_changed == 'true')
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version-bump-ui.outputs.version }}
+      version: ${{ needs.determine-version.outputs.version }}
     permissions:
       contents: write
       packages: write
@@ -173,11 +222,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Ensure we have the latest including the core tag
+          ref: main
 
       - name: Configure Git
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "github-actions@github.com"
+          git pull
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -187,56 +239,27 @@ jobs:
 
       - run: npm ci
 
-      # Bump version of UI package
-      - name: Determine version bump type for UI
-        id: version-type-ui
-        if: github.event_name == 'push'
-        run: |
-          # Get the most recent commit message
-          COMMIT_MSG=$(git log -1 --pretty=%B)
-
-          # Major: BREAKING CHANGE or "!:" in header
-          if [[ "$COMMIT_MSG" == *"BREAKING CHANGE"* || "$COMMIT_MSG" =~ ^.*!:.*$ ]]; then
-            echo "type=major" >> $GITHUB_OUTPUT
-          # Minor: any feat
-          elif [[ "$COMMIT_MSG" =~ ^feat ]]; then
-            echo "type=minor" >> $GITHUB_OUTPUT
-          else
-            echo "type=patch" >> $GITHUB_OUTPUT
-          fi
-
-          echo "Commit message: $COMMIT_MSG"
-          echo "Determined version type: $(cat $GITHUB_OUTPUT | grep type | cut -d= -f2)"
-
-      - name: Bump UI version
+      # Update UI package.json
+      - name: Update UI version
         id: version-bump-ui
         run: |
           cd packages/ui
 
-          # Use the determined version type
-          if [ "${{ github.event_name }}" == "push" ]; then
-            VERSION_TYPE="${{ steps.version-type-ui.outputs.type }}"
-          else
-            VERSION_TYPE="${{ github.event.inputs.version_type }}"
-          fi
+          # Use centrally determined version
+          VERSION="${{ needs.determine-version.outputs.version }}"
 
-          # Update version without creating a tag
-          npm version $VERSION_TYPE --no-git-tag-version
-          VERSION=$(node -p "require('./package.json').version")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          # Update package.json
+          npm version $VERSION --no-git-tag-version
 
-          # Commit the change
-          git add package.json
+          # Update dependencies to use exact core version
+          npm install --save-exact @devrue/directus-config-toolkit@$VERSION
+
+          git add package.json package-lock.json
           git commit -m "chore(ui): bump version to $VERSION"
 
-          # Push the changes (but no tag)
-          git push origin HEAD:${{ github.ref_name }}
-
-      # Build UI package
-      - name: Build UI package
-        run: |
-          cd packages/ui
-          npm run build
-
-  # Note: Docker image building and publishing is handled by the publish-image.yml workflow
-  # which is triggered automatically when this workflow creates a new tag
+          # Try to push with error handling
+          if ! git push; then
+            echo "::error::Failed to push UI version update. Attempting rollback..."
+            git reset --hard HEAD~1
+            exit 1
+          fi
