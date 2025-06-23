@@ -1,6 +1,7 @@
 import fs from "fs-extra";
 import path from "path";
 import { diffJson } from "diff";
+import { AUDIT_PATH } from "./helper";
 
 export interface AuditLogEntry {
   timestamp: string;
@@ -36,21 +37,10 @@ export class AuditManager {
 
   /**
    * Create a new AuditManager.
-   * @param auditDir Optional absolute path to the audit directory. If not provided, uses DCT_AUDIT_PATH env, then DCT_CONFIG_PATH/audit, then cwd/audit.
    */
-  constructor(auditDir?: string) {
-    let resolvedAuditDir: string;
-    if (auditDir) {
-      resolvedAuditDir = auditDir;
-    } else if (process.env.DCT_AUDIT_PATH) {
-      resolvedAuditDir = process.env.DCT_AUDIT_PATH;
-    } else if (process.env.DCT_CONFIG_PATH) {
-      resolvedAuditDir = path.join(process.env.DCT_CONFIG_PATH, "audit");
-    } else {
-      resolvedAuditDir = path.join(process.cwd(), "audit");
-    }
-    this.auditLogFilePath = path.join(resolvedAuditDir, "audit.ndjson");
-    this.snapshotsBaseDir = path.join(resolvedAuditDir, "snapshots");
+  constructor() {
+    this.auditLogFilePath = path.join(AUDIT_PATH, "audit.ndjson");
+    this.snapshotsBaseDir = path.join(AUDIT_PATH, "snapshots");
 
     // Set retention period from environment variable or default to 30 days
     const retentionDays = process.env.DCT_AUDIT_RETENTION_DAYS;
