@@ -14,16 +14,28 @@ import {
   updateRole,
 } from "@directus/sdk";
 import { writeFileSync, readFileSync } from "fs";
-import { join } from "path";
 import _ from "lodash";
 import {
   callDirectusAPI,
   client,
-  CONFIG_PATH,
   ensureConfigDirs,
   retryOperation,
 } from "./helper";
-import { AuditManager } from "./audit";
+import { BaseConfigManager, FieldExclusionConfig } from "./base-config-manager";
+
+interface DirectusRole {
+  id: string;
+  name: string;
+  icon?: string;
+  description?: string;
+  ip_access?: string[];
+  enforce_tfa?: boolean;
+  admin_access?: boolean;
+  app_access?: boolean;
+  policies?: any[];
+  users?: any[];
+  [key: string]: any;
+}
 
 /**
  * Find the Public policy in a list of policies
@@ -64,14 +76,29 @@ interface Defaults {
   publicPolicyId?: string;
 }
 
-export class RolesManager {
-  private rolePath: string = join(CONFIG_PATH, "roles.json");
-  private policiesPath: string = join(CONFIG_PATH, "policies.json");
-  private accessPath: string = join(CONFIG_PATH, "access.json");
-  private permissionsPath: string = join(CONFIG_PATH, "permissions.json");
-  private auditManager: AuditManager = new AuditManager();
+export class RolesManager extends BaseConfigManager<DirectusRole> {
+  protected readonly configType = "roles";
+  protected readonly defaultFilename = "roles.json";
 
-  constructor() {}
+  private policiesPath: string;
+  private accessPath: string;
+  private permissionsPath: string;
+
+  constructor() {
+    // Roles have specific field handling requirements
+    const fieldConfig: FieldExclusionConfig = {
+      emptyRelationFields: ["policies", "users"], // Many-to-many relationships
+    };
+
+    super(fieldConfig);
+    this.initializeConfigPath();
+    this.policiesPath = this.configPath.replace("roles.json", "policies.json");
+    this.accessPath = this.configPath.replace("roles.json", "access.json");
+    this.permissionsPath = this.configPath.replace(
+      "roles.json",
+      "permissions.json"
+    );
+  }
 
   private emptyPolicies(record: Record<string, any>) {
     if (record["policies"]) {
@@ -158,8 +185,8 @@ export class RolesManager {
     // Prepare roles and export
     const preparedRoles = this.prepareRoles(filteredRoles);
 
-    writeFileSync(this.rolePath, JSON.stringify(preparedRoles, null, 2));
-    console.log(`${filteredRoles.length} roles exported to ${this.rolePath}`);
+    writeFileSync(this.configPath, JSON.stringify(preparedRoles, null, 2));
+    console.log(`${filteredRoles.length} roles exported to ${this.configPath}`);
   }
 
   private async exportPoliciesData(defaults: Defaults) {
@@ -273,7 +300,7 @@ export class RolesManager {
       await this.exportPoliciesData(defaults);
       await this.exportAccessData(defaults);
       await this.exportPermissionsData();
-      const roles = JSON.parse(readFileSync(this.rolePath, "utf8"));
+      const roles = JSON.parse(readFileSync(this.configPath, "utf8"));
       const policies = JSON.parse(readFileSync(this.policiesPath, "utf8"));
       const access = JSON.parse(readFileSync(this.accessPath, "utf8"));
       const permissions = JSON.parse(
@@ -317,7 +344,7 @@ export class RolesManager {
 
   private async handleImportRoles() {
     const defaults = await this.retrieveDefaults();
-    const incomingRoles = JSON.parse(readFileSync(this.rolePath, "utf8"));
+    const incomingRoles = JSON.parse(readFileSync(this.configPath, "utf8"));
     const existingRoles = await client.request(readRoles());
 
     // Map special roles (like Public) that may have different IDs between environments
@@ -545,7 +572,7 @@ export class RolesManager {
 
     // Get role ID mappings (for Public role etc.)
     const existingRoles = await client.request(readRoles());
-    const incomingRoles = JSON.parse(readFileSync(this.rolePath, "utf8"));
+    const incomingRoles = JSON.parse(readFileSync(this.configPath, "utf8"));
     const roleIdMap = this.mapSpecialRoles(incomingRoles, existingRoles);
 
     console.log(
@@ -724,7 +751,7 @@ export class RolesManager {
   private async handleImportPermissions() {
     // Get role ID mappings in case we have special roles
     const existingRoles = await client.request(readRoles());
-    const incomingRoles = JSON.parse(readFileSync(this.rolePath, "utf8"));
+    const incomingRoles = JSON.parse(readFileSync(this.configPath, "utf8"));
     const roleIdMap = this.mapSpecialRoles(incomingRoles, existingRoles);
 
     const sourcePermissions: Record<string, any>[] = JSON.parse(
@@ -913,7 +940,7 @@ export class RolesManager {
 
   private async auditImport(dryRun = false) {
     // Read local data
-    const localRolesRaw = JSON.parse(readFileSync(this.rolePath, "utf8"));
+    const localRolesRaw = JSON.parse(readFileSync(this.configPath, "utf8"));
     const localPoliciesRaw = JSON.parse(
       readFileSync(this.policiesPath, "utf8")
     );
@@ -1062,4 +1089,24 @@ export class RolesManager {
     if (omitId === false) return permissions.filter((p) => !!p.id);
     else return permissions.filter((p) => !!p.id).map((p) => _.omit(p, ["id"]));
   };
+
+  protected async fetchRemoteData(): Promise<DirectusRole[]> {
+    const roles = await client.request(readRoles());
+    return roles.map((role) => this.normalizeItem(role as DirectusRole));
+  }
+
+  public async exportConfig(): Promise<void> {
+    return this.exportRoles();
+  }
+
+  public async importConfig(
+    dryRun = false
+  ): Promise<{ status: "success" | "failure"; message?: string }> {
+    try {
+      await this.importRoles(dryRun);
+      return { status: "success", message: "Roles imported successfully." };
+    } catch (error: any) {
+      return { status: "failure", message: error.message };
+    }
+  }
 }

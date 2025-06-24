@@ -218,4 +218,153 @@ export function registerAuditCommands(program: Command) {
         console.log(`\n✅ All snapshots are valid!`);
       }
     });
+
+  auditCommand
+    .command("consistency-check <type>")
+    .description("Validate consistency between export and audit operations")
+    .action(async (type: string) => {
+      try {
+        console.log(`🔍 Checking export-audit consistency for ${type}...`);
+
+        // Import the appropriate manager based on type
+        let manager: any;
+        switch (type) {
+          case "flows":
+            const { FlowsManager } = await import("../flows");
+            manager = new FlowsManager();
+            break;
+          case "roles":
+            const { RolesManager } = await import("../roles");
+            manager = new RolesManager();
+            break;
+          case "settings":
+            const { SettingsManager } = await import("../settings");
+            manager = new SettingsManager();
+            break;
+          case "files":
+            const { FilesManager } = await import("../files");
+            manager = new FilesManager();
+            break;
+          case "schema":
+            const { SchemaManager } = await import("../schema");
+            manager = new SchemaManager();
+            break;
+          default:
+            console.error(`Unsupported config type: ${type}`);
+            process.exit(1);
+        }
+
+        // Fetch current remote data
+        console.log("📥 Fetching current remote data...");
+        const remoteData = await manager.fetchRemoteData();
+
+        // Validate consistency with latest audit snapshot
+        console.log("🔍 Comparing with latest audit snapshot...");
+        const consistencyResult = await manager.validateExportAuditConsistency(
+          remoteData
+        );
+
+        if (consistencyResult.isConsistent) {
+          console.log(`✅ Export-audit consistency check passed for ${type}`);
+          console.log(`   Current remote data matches latest audit snapshot`);
+        } else {
+          console.log(`❌ Export-audit consistency issues found for ${type}:`);
+          consistencyResult.differences.forEach((diff: string, idx: number) => {
+            console.log(`   ${idx + 1}. ${diff}`);
+          });
+
+          console.log(`\n💡 Suggestions:`);
+          console.log(`   - Run 'dct export ${type}' to create a fresh export`);
+          console.log(
+            `   - Check for configuration drift in your Directus instance`
+          );
+          console.log(`   - Review recent changes that might not be captured`);
+
+          process.exit(1);
+        }
+      } catch (error: any) {
+        console.error(`Failed to check consistency: ${error.message}`);
+        process.exit(1);
+      }
+    });
+
+  auditCommand
+    .command("consistency-check-all")
+    .description(
+      "Validate consistency between export and audit operations for all config types"
+    )
+    .action(async () => {
+      const configTypes = ["flows", "roles", "settings", "files", "schema"];
+      let allConsistent = true;
+
+      console.log(
+        `🔍 Performing comprehensive export-audit consistency check...`
+      );
+
+      for (const type of configTypes) {
+        try {
+          console.log(`\n📋 Checking ${type}...`);
+
+          // Import the appropriate manager based on type
+          let manager: any;
+          switch (type) {
+            case "flows":
+              const { FlowsManager } = await import("../flows");
+              manager = new FlowsManager();
+              break;
+            case "roles":
+              const { RolesManager } = await import("../roles");
+              manager = new RolesManager();
+              break;
+            case "settings":
+              const { SettingsManager } = await import("../settings");
+              manager = new SettingsManager();
+              break;
+            case "files":
+              const { FilesManager } = await import("../files");
+              manager = new FilesManager();
+              break;
+            case "schema":
+              const { SchemaManager } = await import("../schema");
+              manager = new SchemaManager();
+              break;
+            default:
+              console.log(`   ⚪ ${type}: Unsupported for consistency check`);
+              continue;
+          }
+
+          // Fetch current remote data
+          const remoteData = await manager.fetchRemoteData();
+
+          // Validate consistency with latest audit snapshot
+          const consistencyResult =
+            await manager.validateExportAuditConsistency(remoteData);
+
+          if (consistencyResult.isConsistent) {
+            console.log(`   ✅ ${type}: Consistent`);
+          } else {
+            console.log(
+              `   ❌ ${type}: Inconsistent (${consistencyResult.differences.length} issues)`
+            );
+            allConsistent = false;
+          }
+        } catch (error: any) {
+          console.log(`   ❌ ${type}: Error - ${error.message}`);
+          allConsistent = false;
+        }
+      }
+
+      console.log(`\n📊 Overall Consistency Status:`);
+      if (allConsistent) {
+        console.log(
+          `✅ All configuration types are consistent between export and audit!`
+        );
+      } else {
+        console.log(`❌ Some configuration types have consistency issues.`);
+        console.log(
+          `💡 Run 'dct audit consistency-check <type>' for detailed analysis.`
+        );
+        process.exit(1);
+      }
+    });
 }

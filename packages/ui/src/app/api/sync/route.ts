@@ -31,19 +31,19 @@ export async function POST(request: NextRequest) {
     if (direction === "import") {
       switch (type) {
         case "flows":
-          await flowsManager.importFlows(dryRun);
+          await flowsManager.importConfig(dryRun);
           break;
         case "roles":
-          await rolesManager.importRoles(dryRun);
+          await rolesManager.importConfig(dryRun);
           break;
         case "settings":
-          await settingsManager.importSettings(dryRun);
+          await settingsManager.importConfig(dryRun);
           break;
         case "files":
-          await filesManager.importFiles(dryRun);
+          await filesManager.importConfig(dryRun);
           break;
         case "schema":
-          await schemaManager.importSchema(dryRun);
+          await schemaManager.importConfig(dryRun);
           break;
         default:
           throw new Error(`Unsupported type for import: ${type}`);
@@ -51,19 +51,19 @@ export async function POST(request: NextRequest) {
     } else if (direction === "export") {
       switch (type) {
         case "flows":
-          await flowsManager.exportFlows();
+          await flowsManager.exportConfig();
           break;
         case "roles":
-          await rolesManager.exportRoles();
+          await rolesManager.exportConfig();
           break;
         case "settings":
-          await settingsManager.exportSettings();
+          await settingsManager.exportConfig();
           break;
         case "files":
-          await filesManager.exportFiles();
+          await filesManager.exportConfig();
           break;
         case "schema":
-          await schemaManager.exportSchema();
+          await schemaManager.exportConfig();
           break;
         default:
           throw new Error(`Unsupported type for export: ${type}`);

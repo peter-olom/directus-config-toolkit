@@ -1,19 +1,36 @@
 import { schemaApply, schemaDiff, schemaSnapshot } from "@directus/sdk";
 import { writeFileSync, readFileSync } from "fs";
-import { join } from "path";
-import { client, CONFIG_PATH, ensureConfigDirs } from "./helper";
+import { client, ensureConfigDirs } from "./helper";
 import _ from "lodash";
-import { AuditManager } from "./audit";
+import { BaseConfigManager, FieldExclusionConfig } from "./base-config-manager";
 
-export class SchemaManager {
-  private schemaPath: string = join(CONFIG_PATH, "schema.json");
-  private auditManager: AuditManager = new AuditManager();
+interface DirectusSchema {
+  collections?: any[];
+  fields?: any[];
+  relations?: any[];
+  [key: string]: any;
+}
 
-  private async auditExport(schema: any) {
-    const schemaSnapshotPath = await this.auditManager.storeSnapshot(
-      "schema",
-      schema
-    );
+export class SchemaManager extends BaseConfigManager<DirectusSchema> {
+  protected readonly configType = "schema";
+  protected readonly defaultFilename = "schema.json";
+
+  constructor() {
+    // Schema typically doesn't need field exclusions
+    const fieldConfig: FieldExclusionConfig = {};
+
+    super(fieldConfig);
+    this.initializeConfigPath();
+  }
+
+  protected async fetchRemoteData(): Promise<DirectusSchema[]> {
+    const snapshot = await client.request(schemaSnapshot());
+    // Schema is a single object, but we wrap it in an array for consistency with BaseConfigManager
+    return [snapshot];
+  }
+
+  private async auditExport(schema: DirectusSchema) {
+    const schemaSnapshotPath = await this.storeEnhancedSnapshot([schema]);
     await this.auditManager.log({
       operation: "export",
       manager: "SchemaManager",
@@ -26,21 +43,23 @@ export class SchemaManager {
     });
   }
 
-  exportSchema = async () => {
+  public async exportConfig(): Promise<void> {
     ensureConfigDirs();
     try {
-      const snapshot = await client.request(schemaSnapshot());
-      writeFileSync(this.schemaPath, JSON.stringify(snapshot, null, 2));
-      await this.auditExport(snapshot);
-      console.log(`Schema exported to ${this.schemaPath}`);
+      const schemas = await this.fetchRemoteData();
+      const schema = schemas[0]; // Schema is always a single object
+
+      writeFileSync(this.configPath, JSON.stringify(schema, null, 2));
+      await this.auditExport(schema);
+      console.log(`Schema exported to ${this.configPath}`);
     } catch (error) {
       console.error("Error exporting schema:", error);
       throw error;
     }
-  };
+  }
 
   private async auditImport(dryRun = false) {
-    const localSchema = JSON.parse(readFileSync(this.schemaPath, "utf8"));
+    const localSchema = JSON.parse(readFileSync(this.configPath, "utf8"));
     await this.auditManager.auditImportOperation(
       "schema",
       "SchemaManager",
@@ -57,18 +76,30 @@ export class SchemaManager {
     );
   }
 
-  importSchema = async (dryRun = false) => {
-    await this.auditImport(dryRun);
-    if (!dryRun) {
-      console.log("Schema imported successfully.");
-    } else {
-      console.log("[Dry Run] Import preview complete. No changes applied.");
+  public async importConfig(
+    dryRun = false
+  ): Promise<{ status: "success" | "failure"; message?: string }> {
+    try {
+      await this.auditImport(dryRun);
+      if (!dryRun) {
+        console.log("Schema imported successfully.");
+      } else {
+        console.log("[Dry Run] Import preview complete. No changes applied.");
+      }
+      return { status: "success", message: "Schema imported successfully." };
+    } catch (error: any) {
+      console.error("Error importing schema:", error);
+      return { status: "failure", message: error.message };
     }
-  };
+  }
+
+  // Legacy method names for backward compatibility
+  exportSchema = () => this.exportConfig();
+  importSchema = (dryRun?: boolean) => this.importConfig(dryRun);
 
   private async handleImporSchema() {
     try {
-      const vcSchema = JSON.parse(readFileSync(this.schemaPath, "utf8"));
+      const vcSchema = JSON.parse(readFileSync(this.configPath, "utf8"));
 
       console.log("Checking schema differences...");
       // check schema differences

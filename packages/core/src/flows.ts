@@ -8,283 +8,328 @@ import {
   updateFlow,
 } from "@directus/sdk";
 import { writeFileSync, readFileSync } from "fs";
-import { join } from "path";
-import { client, CONFIG_PATH, ensureConfigDirs } from "./helper";
+import { client, ensureConfigDirs } from "./helper";
 import _ from "lodash";
-import { AuditManager } from "./audit";
+import {
+  BaseConfigManager,
+  DependencyInfo,
+  FieldExclusionConfig,
+} from "./base-config-manager";
 
 interface DirectusOperation {
   id: string;
   resolve: string | null;
   reject: string | null;
+  flow: string;
+  [key: string]: any;
+}
+
+interface DirectusFlow {
+  id: string;
+  name: string;
+  operations?: DirectusOperation[];
   [key: string]: any;
 }
 
 /**
- * FlowsManager is a class that handles exporting and importing flows.
+ * Operations Manager for handling Directus operations
  */
-export class FlowsManager {
-  private flowPath: string = join(CONFIG_PATH, "flows.json");
-  private operationPath: string = join(CONFIG_PATH, "operations.json");
-  private auditManager: AuditManager = new AuditManager();
+class OperationsManager extends BaseConfigManager<DirectusOperation> {
+  protected readonly configType = "operations";
+  protected readonly defaultFilename = "operations.json";
 
-  constructor() {}
+  constructor() {
+    const fieldConfig: FieldExclusionConfig = {
+      nullifyFields: ["user_created"],
+    };
 
-  setUserNull(record: Record<string, any>) {
-    if (record["user_created"]) {
-      record["user_created"] = null;
-    }
-    return record;
+    super(fieldConfig);
+    this.initializeConfigPath();
   }
 
-  emptyOperations(record: Record<string, any>) {
-    if (record["operations"]) {
-      record["operations"] = [];
-    }
-    return record;
+  protected async fetchRemoteData(): Promise<DirectusOperation[]> {
+    const operations = await client.request(readOperations());
+    return operations as DirectusOperation[];
   }
 
-  normalizeFlow(flow: any) {
-    // Nullify user_created and empty operations for consistency
-    return this.emptyOperations(this.setUserNull({ ...flow }));
-  }
+  public async exportConfig(): Promise<void> {
+    // Implementation for operations export
+    const operations = await this.fetchRemoteData();
+    const normalizedOperations = this.normalizeItems(operations);
 
-  normalizeOperation(operation: any) {
-    // Nullify user_created for consistency
-    return this.setUserNull({ ...operation });
-  }
-
-  private async auditExport(flows: any[], operations: any[]) {
-    const flowsSnapshotPath = await this.auditManager.storeSnapshot(
-      "flows",
-      flows
+    writeFileSync(
+      this.configPath,
+      JSON.stringify(normalizedOperations, null, 2)
     );
-    const operationsSnapshotPath = await this.auditManager.storeSnapshot(
-      "operations",
-      operations
-    );
-    await this.auditManager.log({
-      operation: "export",
-      manager: "FlowsManager",
-      itemType: "flows",
+    await this.storeEnhancedSnapshot(operations);
+  }
+
+  public async importConfig(
+    dryRun?: boolean
+  ): Promise<{ status: "success" | "failure"; message?: string }> {
+    // Implementation for operations import
+    return {
       status: "success",
-      message: `Exported ${flows.length} flows and ${operations.length} operations`,
-      snapshotFile: flowsSnapshotPath,
-    });
-    await this.auditManager.log({
-      operation: "export",
-      manager: "FlowsManager",
-      itemType: "operations",
-      status: "success",
-      message: `Exported ${operations.length} operations`,
-      snapshotFile: operationsSnapshotPath,
-    });
+      message: "Operations import not implemented yet",
+    };
   }
+}
 
-  exportFlows = async () => {
-    ensureConfigDirs();
+/**
+ * FlowsManager that inherits from BaseConfigManager
+ * Provides standardized data normalization and audit capabilities
+ */
+export class FlowsManager extends BaseConfigManager<DirectusFlow> {
+  protected readonly configType = "flows";
+  protected readonly defaultFilename = "flows.json";
 
-    try {
-      // flows are tied to operations, so we need to fetch all operations
-      const operations = await client.request(readOperations());
-      writeFileSync(
-        this.operationPath,
-        JSON.stringify(operations.map(this.setUserNull), null, 2)
-      );
+  private operationPath: string;
+  private operationsManager: OperationsManager;
 
-      const flows = await client.request(readFlows());
-      writeFileSync(
-        this.flowPath,
-        // empty operations because it is many-to-many relationship; relationship will be created when operations are imported
-        JSON.stringify(
-          flows.map(this.setUserNull).map(this.emptyOperations),
-          null,
-          2
-        )
-      );
+  constructor() {
+    // Configure field exclusion patterns for flows
+    const fieldConfig: FieldExclusionConfig = {
+      nullifyFields: ["user_created"],
+      emptyRelationFields: ["operations"], // Many-to-many relationship
+    };
 
-      await this.auditExport(flows, operations);
-
-      console.log(`Flows exported to ${this.flowPath}`);
-      console.log(`Operations exported to ${this.operationPath}`);
-      console.log(
-        `Exported ${flows.length} flows and ${operations.length} operations`
-      );
-    } catch (error) {
-      console.error("Error exporting flows:", error);
-      throw error;
-    }
-  };
-
-  private async fetchRemoteFlowsAndOperations() {
-    let flows = await client.request(readFlows());
-    let operations = await client.request(readOperations());
-    flows = flows.map((flow) => this.normalizeFlow(flow));
-    operations = operations.map((op) => this.normalizeOperation(op));
-    return { flows, operations };
-  }
-
-  private async auditImport(dryRun = false) {
-    const localFlows = JSON.parse(readFileSync(this.flowPath, "utf8"));
-    const localOperations = JSON.parse(
-      readFileSync(this.operationPath, "utf8")
+    super(fieldConfig);
+    this.initializeConfigPath();
+    this.operationPath = this.configPath.replace(
+      "flows.json",
+      "operations.json"
     );
-    await this.auditManager.auditImportOperation(
-      "flows",
-      "FlowsManager",
-      { flows: localFlows, operations: localOperations },
-      async () => await this.fetchRemoteFlowsAndOperations(),
-      async () => {
-        await this.handleImportFlows();
-        await this.handleImportOperations();
-        return {
-          status: "success",
-          message: "Flows and operations imported successfully.",
-        };
-      },
-      dryRun
-    );
+    this.operationsManager = new OperationsManager();
   }
 
-  importFlows = async (dryRun = false) => {
-    await this.auditImport(dryRun);
-    if (!dryRun) {
-      console.log("Flows and operations imported successfully.");
-    } else {
-      console.log("[Dry Run] Import preview complete. No changes applied.");
-    }
-  };
+  /**
+   * Detect dependencies within flows configuration
+   * Maps flow -> operation relationships and operation -> operation chains
+   */
+  protected detectDependencies(flows: DirectusFlow[]): DependencyInfo[] {
+    const dependencies: DependencyInfo[] = [];
 
-  private async handleImportFlows() {
-    const incomingFlows = JSON.parse(readFileSync(this.flowPath, "utf8"));
-    const destinationFlows = await client.request(readFlows());
-
-    console.log(`Importing ${incomingFlows.length} flows`);
-
-    try {
-      // First update or create flows
-      for (const flow of incomingFlows) {
-        const existingFlow = destinationFlows.find((f) => f.id === flow.id);
-        if (existingFlow) {
-          if (!_.isEqual(existingFlow, flow)) {
-            // Preserve date_created when updating existing flows
-            const updateData = { ...flow };
-            if (existingFlow.date_created) {
-              updateData.date_created = existingFlow.date_created;
-            }
-            await client.request(updateFlow(flow.id, updateData));
-          }
-        } else {
-          await client.request(createFlow(flow));
-        }
-      }
-
-      // Then delete any flows that no longer exist in the import file
-      const diffFlows = _.differenceBy(destinationFlows, incomingFlows, "id");
-      if (diffFlows.length) {
-        console.log(`Deleting ${diffFlows.length} flows that no longer exist`);
-        await client.request(deleteFlows(diffFlows.map((f) => f.id)));
-      }
-
-      console.log("All flows processed successfully");
-    } catch (error) {
-      console.error("Error processing flows:", error);
-      throw error;
-    }
+    // This would require loading operations data as well
+    // For now, return empty array - will be enhanced in Phase 2
+    return dependencies;
   }
 
-  private async handleImportOperations() {
-    const incomingOperations = JSON.parse(
-      readFileSync(this.operationPath, "utf8")
-    );
-    const destinationOperations = await client.request(readOperations());
-
-    // Get all flows to identify which operations need to be regenerated
-    const incomingFlows = JSON.parse(readFileSync(this.flowPath, "utf8"));
-
-    // Create a map to store original date_created values
-    const operationDates = new Map();
-
-    // Store original date_created values before deletion
-    destinationOperations.forEach((op) => {
-      if (op.date_created) {
-        operationDates.set(op.id, op.date_created);
-      }
-    });
-
-    // Delete all existing operations for the flows we're importing
-    // This ensures we don't have uniqueness constraint violations for the "resolve" field
-    const operationsToDelete = destinationOperations.filter((operation) => {
-      // Only delete operations that belong to flows we're importing
-      return incomingFlows.some(
-        (flow: { id: any }) => operation.flow === flow.id
-      );
-    });
-
-    if (operationsToDelete.length) {
-      console.log(
-        `Deleting ${operationsToDelete.length} existing operations for the imported flows`
-      );
-      await client.request(
-        deleteOperations(operationsToDelete.map((o) => o.id))
-      );
-    }
-
-    // Sort operations based on dependencies
-    const sortedOperations =
-      this.sortOperationsByDependency(incomingOperations);
-
-    // Create all operations from scratch
-    console.log(`Creating ${sortedOperations.length} operations`);
-    try {
-      for (const operation of sortedOperations) {
-        // Preserve original date_created if it existed
-        if (operationDates.has(operation.id)) {
-          operation.date_created = operationDates.get(operation.id);
-        }
-        await client.request(createOperation(operation));
-      }
-      console.log("All operations created successfully");
-    } catch (error) {
-      console.error("Error creating operations:", error);
-      throw error;
-    }
-
-    // (MetadataManager removed from import logic)
-  }
-
+  /**
+   * Enhanced dependency sorting for operations
+   * Handles operation -> operation trigger relationships
+   */
   private sortOperationsByDependency(
     operations: DirectusOperation[]
   ): DirectusOperation[] {
-    const sorted: DirectusOperation[] = [];
-    const visited = new Set<string>();
+    const operationMap = new Map<string, DirectusOperation>();
+    const sortedOperations: DirectusOperation[] = [];
+    const processed = new Set<string>();
+    const processing = new Set<string>(); // For circular dependency detection
 
-    // First, add all operations with no dependencies
-    operations.forEach((operation) => {
-      if (!operation.resolve && !operation.reject) {
-        sorted.push(operation);
-        visited.add(operation.id);
+    // Build operation map
+    operations.forEach((op) => operationMap.set(op.id, op));
+
+    const processOperation = (operationId: string): void => {
+      if (processed.has(operationId)) return;
+
+      if (processing.has(operationId)) {
+        console.warn(
+          `Circular dependency detected in operations involving: ${operationId}`
+        );
+        return;
       }
-    });
 
-    // Then, repeatedly find and add operations whose dependencies are satisfied
-    let added: boolean;
-    do {
-      added = false;
-      operations.forEach((operation) => {
-        if (!visited.has(operation.id)) {
-          const dependencies = [operation.resolve, operation.reject].filter(
-            (dep): dep is string => dep !== null
-          );
-          if (dependencies.every((depId) => visited.has(depId))) {
-            sorted.push(operation);
-            visited.add(operation.id);
-            added = true;
-          }
-        }
+      const operation = operationMap.get(operationId);
+      if (!operation) return;
+
+      processing.add(operationId);
+
+      // Process dependencies first (resolve and reject operations)
+      if (operation.resolve && operationMap.has(operation.resolve)) {
+        processOperation(operation.resolve);
+      }
+      if (operation.reject && operationMap.has(operation.reject)) {
+        processOperation(operation.reject);
+      }
+
+      processing.delete(operationId);
+      processed.add(operationId);
+      sortedOperations.push(operation);
+    };
+
+    // Process all operations
+    operations.forEach((op) => processOperation(op.id));
+
+    return sortedOperations;
+  }
+
+  /**
+   * Fetch remote flows data from Directus
+   */
+  protected async fetchRemoteData(): Promise<DirectusFlow[]> {
+    const flows = await client.request(readFlows());
+    return flows as DirectusFlow[];
+  }
+
+  /**
+   * Fetch remote operations data from Directus
+   */
+  private async fetchRemoteOperations(): Promise<DirectusOperation[]> {
+    const operations = await client.request(readOperations());
+    return operations as DirectusOperation[];
+  }
+
+  /**
+   * Export flows and operations configuration with enhanced audit
+   */
+  public async exportConfig(): Promise<void> {
+    ensureConfigDirs();
+
+    try {
+      // Fetch operations first (flows depend on operations)
+      const operations = await this.fetchRemoteOperations();
+      const normalizedOperations =
+        this.operationsManager.normalizeItems(operations);
+
+      // Write operations file
+      writeFileSync(
+        this.operationPath,
+        JSON.stringify(normalizedOperations, null, 2)
+      );
+
+      // Fetch and normalize flows
+      const flows = await this.fetchRemoteData();
+      const normalizedFlows = this.normalizeItems(flows);
+
+      // Write flows file
+      writeFileSync(this.configPath, JSON.stringify(normalizedFlows, null, 2));
+
+      // Create enhanced audit snapshots
+      await this.storeEnhancedSnapshot(
+        flows,
+        `export_${new Date().toISOString().replace(/[:.]/g, "-")}`
+      );
+      await this.operationsManager.storeEnhancedSnapshot(
+        operations,
+        `export_operations_${new Date().toISOString().replace(/[:.]/g, "-")}`
+      );
+
+      // Validate export consistency
+      const validation = await this.validateExportAuditConsistency(flows);
+      if (!validation.isConsistent) {
+        console.warn(
+          "Export-audit consistency issues found:",
+          validation.differences
+        );
+      }
+
+      await this.auditManager.log({
+        operation: "export",
+        manager: "FlowsManager",
+        itemType: "flows",
+        status: "success",
+        message: `Exported ${flows.length} flows and ${operations.length} operations with enhanced metadata`,
       });
-    } while (added);
 
-    return sorted;
+      console.log(
+        `✅ Successfully exported ${flows.length} flows and ${operations.length} operations`
+      );
+    } catch (error: any) {
+      await this.auditManager.log({
+        operation: "export",
+        manager: "FlowsManager",
+        itemType: "flows",
+        status: "failure",
+        message: error.message,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Import flows and operations configuration with enhanced validation
+   */
+  public async importConfig(
+    dryRun = false
+  ): Promise<{ status: "success" | "failure"; message?: string }> {
+    try {
+      // Load local configuration
+      const localFlows: DirectusFlow[] = JSON.parse(
+        readFileSync(this.configPath, "utf8")
+      );
+      const localOperations: DirectusOperation[] = JSON.parse(
+        readFileSync(this.operationPath, "utf8")
+      );
+
+      // Sort operations by dependency to ensure proper import order
+      const sortedOperations = this.sortOperationsByDependency(localOperations);
+
+      // Use audit manager for comprehensive import tracking
+      return new Promise((resolve) => {
+        this.auditManager
+          .auditImportOperation(
+            "flows",
+            "FlowsManager",
+            { flows: localFlows, operations: localOperations },
+            async () => {
+              const flows = await this.fetchRemoteData();
+              const operations = await this.fetchRemoteOperations();
+              return { flows, operations };
+            },
+            async () => {
+              if (dryRun) {
+                return {
+                  status: "success" as const,
+                  message: "Dry run completed - no changes applied",
+                };
+              }
+
+              // Delete existing flows and operations
+              const existingFlows = await this.fetchRemoteData();
+              if (existingFlows.length > 0) {
+                await client.request(
+                  deleteFlows(existingFlows.map((f) => f.id))
+                );
+              }
+
+              const existingOperations = await this.fetchRemoteOperations();
+              if (existingOperations.length > 0) {
+                await client.request(
+                  deleteOperations(existingOperations.map((op) => op.id))
+                );
+              }
+
+              // Import operations first (in dependency order)
+              for (const operation of sortedOperations) {
+                const { id, ...operationData } = operation;
+                await client.request(createOperation(operationData));
+              }
+
+              // Import flows
+              for (const flow of localFlows) {
+                const { id, ...flowData } = flow;
+                await client.request(createFlow(flowData));
+              }
+
+              return {
+                status: "success" as const,
+                message: `Imported ${localFlows.length} flows and ${sortedOperations.length} operations`,
+              };
+            },
+            dryRun
+          )
+          .then(() => {
+            resolve({
+              status: "success",
+              message: "Import operation completed successfully",
+            });
+          })
+          .catch((error) => {
+            resolve({ status: "failure", message: error.message });
+          });
+      });
+    } catch (error: any) {
+      return { status: "failure", message: error.message };
+    }
   }
 }

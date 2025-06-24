@@ -1,5 +1,5 @@
 import { join } from "path";
-import { client, CONFIG_PATH, ensureConfigDirs } from "./helper";
+import { client, ensureConfigDirs } from "./helper";
 import {
   readRole,
   readSettings,
@@ -9,13 +9,51 @@ import {
 import { readFileSync, writeFileSync } from "fs";
 import { findPublicRole } from "./roles";
 import { v4 as uuidv4 } from "uuid";
-import { AuditManager } from "./audit";
+import { BaseConfigManager, FieldExclusionConfig } from "./base-config-manager";
 import { ConfigType } from "./types/generic";
 
 interface Role {
   id: string;
   name?: string;
   icon?: string;
+}
+
+interface DirectusSettings {
+  id?: string;
+  project_name?: string;
+  project_url?: string;
+  project_color?: string;
+  project_logo?: string;
+  public_foreground?: string;
+  public_background?: string;
+  public_note?: string;
+  auth_login_attempts?: number;
+  auth_password_policy?: string;
+  storage_asset_transform?: string;
+  storage_asset_presets?: any;
+  custom_css?: string;
+  basemaps?: any;
+  module_bar?: any;
+  custom_aspect_ratios?: any;
+  storage_default_folder?: string;
+  mapbox_key?: string;
+  project_descriptor?: string;
+  default_language?: string;
+  public_favicon?: string;
+  default_appearance?: string;
+  default_theme_light?: string;
+  theme_light_overrides?: any;
+  default_theme_dark?: string;
+  theme_dark_overrides?: any;
+  report_error_url?: string;
+  report_bug_url?: string;
+  report_feature_url?: string;
+  public_registration?: boolean;
+  public_registration_role?: string;
+  public_registration_verify_email?: boolean;
+  public_registration_email_filter?: any;
+  visual_editor_urls?: any;
+  [key: string]: any;
 }
 
 // Define fields that are supported by the SDK
@@ -68,50 +106,68 @@ const UNSUPPORTED_FIELDS = [
   "visual_editor_urls",
 ];
 
-export class SettingsManager {
-  private outputPath: string = join(CONFIG_PATH, "settings.json");
-  private auditManager: AuditManager = new AuditManager();
+export class SettingsManager extends BaseConfigManager<DirectusSettings> {
+  protected readonly configType = "settings";
+  protected readonly defaultFilename = "settings.json";
 
-  exportSettings = async () => {
-    ensureConfigDirs();
+  constructor() {
+    // Settings typically exclude ID field for export/import
+    const fieldConfig: FieldExclusionConfig = {
+      excludeFields: ["id"],
+    };
 
-    try {
-      const settings = await client.request(readSettings());
-      if (settings.id === null) {
-        // Handle case with no settings
-        return console.log("No settings found.");
-      }
+    super(fieldConfig);
+    this.initializeConfigPath();
+  }
 
-      // Create a copy of settings and exclude the 'id' field
-      const { id, ...settingsWithoutId } = settings;
+  protected async fetchRemoteData(): Promise<DirectusSettings[]> {
+    const settings = await client.request(readSettings());
+    // Settings is a single object, but we wrap it in an array for consistency
+    return [settings];
+  }
 
-      writeFileSync(
-        this.outputPath,
-        JSON.stringify(settingsWithoutId, null, 2)
-      );
-      await this.auditExport(settingsWithoutId);
-
-      console.log(`Settings exported to ${this.outputPath}`);
-    } catch (error) {
-      console.error("Error exporting settings:", error);
-      throw error;
-    }
-  };
-
-  private async auditExport(settings: any) {
-    const settingsSnapshotPath = await this.auditManager.storeSnapshot(
-      "settings",
-      settings
-    );
+  private async auditExport(settings: DirectusSettings) {
+    const settingsSnapshotPath = await this.storeEnhancedSnapshot([settings]);
     await this.auditManager.log({
       operation: "export",
       manager: "SettingsManager",
       itemType: "settings",
       status: "success",
-      message: `Exported settings with ${Object.keys(settings).length} fields`,
+      message: "Exported settings successfully",
       snapshotFile: settingsSnapshotPath,
     });
   }
+
+  public async exportConfig(): Promise<void> {
+    ensureConfigDirs();
+
+    try {
+      const settingsArray = await this.fetchRemoteData();
+      const settings = settingsArray[0];
+
+      if (settings.id === null) {
+        // Handle case with no settings
+        return console.log("No settings found.");
+      }
+
+      // Normalize the settings (removes ID field)
+      const normalizedSettings = this.normalizeItem(settings);
+
+      writeFileSync(
+        this.configPath,
+        JSON.stringify(normalizedSettings, null, 2)
+      );
+      await this.auditExport(normalizedSettings);
+
+      console.log(`Settings exported to ${this.configPath}`);
+    } catch (error) {
+      console.error("Error exporting settings:", error);
+      throw error;
+    }
+  }
+
+  // Legacy method name for backward compatibility
+  exportSettings = () => this.exportConfig();
 
   // Check if a role exists by ID
   private async roleExists(roleId: string): Promise<boolean> {
@@ -137,7 +193,7 @@ export class SettingsManager {
   }
 
   private async auditImport(dryRun = false) {
-    const localSettings = JSON.parse(readFileSync(this.outputPath, "utf8"));
+    const localSettings = JSON.parse(readFileSync(this.configPath, "utf8"));
     await this.auditManager.auditImportOperation(
       "settings",
       "SettingsManager",
@@ -154,14 +210,25 @@ export class SettingsManager {
     );
   }
 
-  importSettings = async (dryRun = false) => {
-    await this.auditImport(dryRun);
-    if (!dryRun) {
-      console.log("Settings import completed successfully.");
-    } else {
-      console.log("[Dry Run] Import preview complete. No changes applied.");
+  public async importConfig(
+    dryRun = false
+  ): Promise<{ status: "success" | "failure"; message?: string }> {
+    try {
+      await this.auditImport(dryRun);
+      if (!dryRun) {
+        console.log("Settings import completed successfully.");
+      } else {
+        console.log("[Dry Run] Import preview complete. No changes applied.");
+      }
+      return { status: "success", message: "Settings imported successfully." };
+    } catch (error: any) {
+      console.error("Error importing settings:", error);
+      return { status: "failure", message: error.message };
     }
-  };
+  }
+
+  // Legacy method name for backward compatibility
+  importSettings = (dryRun?: boolean) => this.importConfig(dryRun);
 
   private async handleImportSettings() {
     try {
@@ -174,7 +241,7 @@ export class SettingsManager {
       }
 
       console.log("Reading settings from file...");
-      const settings = JSON.parse(readFileSync(this.outputPath, "utf8"));
+      const settings = JSON.parse(readFileSync(this.configPath, "utf8"));
 
       // Check for references that might cause foreign key constraints
       // Get field lists
@@ -254,7 +321,10 @@ export class SettingsManager {
               const existingRoles = await client.request(readRoles());
 
               // Read the source roles from file
-              const rolePath = join(CONFIG_PATH, "roles.json");
+              const rolePath = this.configPath.replace(
+                "settings.json",
+                "roles.json"
+              );
               const incomingRoles = JSON.parse(readFileSync(rolePath, "utf8"));
 
               // Find the source role that was referenced
