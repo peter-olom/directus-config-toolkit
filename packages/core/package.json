@@ -16,7 +16,13 @@
     "README.md"
   ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:integration": "jest integration",
+    "test:integration:stable": "DIRECTUS_TEST_VERSION=11.2.0 jest integration",
+    "test:integration:latest": "DIRECTUS_TEST_VERSION=11.9.3 jest integration",
+    "test:integration:all": "jest roleManager-versions.test.ts",
     "build": "tsup",
     "dev": "tsup --watch"
   },
@@ -25,7 +31,6 @@
   "license": "MIT",
   "description": "A toolkit for managing Directus configurations",
   "dependencies": {
-    "@directus/sdk": "^18.0.0",
     "@types/bcrypt": "^5.0.2",
     "axios": "^1.7.7",
     "bcrypt": "^6.0.0",
@@ -41,12 +46,18 @@
     "uuid": "^11.1.0"
   },
   "devDependencies": {
+    "@directus/sdk": "^20.0.0",
+    "@types/dockerode": "^3.3.42",
     "@types/express": "^5.0.1",
     "@types/fs-extra": "^11.0.4",
+    "@types/jest": "^30.0.0",
     "@types/lodash": "^4.17.13",
     "@types/uuid": "^10.0.0",
     "concurrently": "^8.2.2",
+    "dockerode": "^4.0.7",
+    "jest": "^30.0.4",
     "nodemon": "^3.0.3",
+    "ts-jest": "^29.4.0",
     "ts-node": "^10.9.2",
     "tsup": "^7.2.0",
     "typescript": "^5.0.0"

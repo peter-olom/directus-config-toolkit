@@ -1,0 +1,32 @@
+FROM directus/directus:11.9.3
+
+# Install additional tools needed for testing
+RUN apk add --no-cache curl jq
+
+# Create directories for DCT
+RUN mkdir -p /directus/dct /directus/config
+
+# Copy DCT files (these will be mounted at runtime)
+# The test will mount the built DCT files here
+
+# Create a wrapper script for DCT
+RUN echo '#!/bin/sh\n\
+export DCT_API_URL="${DCT_API_URL:-http://localhost:8055}"\n\
+export DCT_CONFIG_PATH="${DCT_CONFIG_PATH:-/directus/config}"\n\
+export DCT_TOKEN="${DCT_TOKEN:-}"\n\
+\n\
+if [ -z "$DCT_TOKEN" ]; then\n\
+  echo "Getting admin token..."\n\
+  DCT_TOKEN=$(npx directus auth create-token --user admin@test.local 2>/dev/null || echo "admin-token")\n\
+  export DCT_TOKEN\n\
+fi\n\
+\n\
+exec node /directus/dct/cli.js "$@"\n\
+' > /usr/local/bin/dct && chmod +x /usr/local/bin/dct
+
+# Health check that actually waits for Directus to be ready
+HEALTHCHECK --interval=5s --timeout=5s --retries=12 \
+  CMD curl -f http://localhost:8055/server/health || exit 1
+
+# Default command
+CMD ["node", "cli.js", "start"]

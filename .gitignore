@@ -8,3 +8,6 @@ dist
 *.tgz
 archive
 *.sql
+debug-config
+test-verification/
+test-config/
