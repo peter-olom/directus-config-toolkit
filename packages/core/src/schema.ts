@@ -1,6 +1,6 @@
 import { schemaApply, schemaDiff, schemaSnapshot } from "@directus/sdk";
 import { writeFileSync, readFileSync } from "fs";
-import { client, ensureConfigDirs } from "./helper";
+import { client, ensureConfigDirs, callDirectusAPI } from "./helper";
 import _ from "lodash";
 import { BaseConfigManager, FieldExclusionConfig } from "./base-config-manager";
 
@@ -58,7 +58,7 @@ export class SchemaManager extends BaseConfigManager<DirectusSchema> {
     }
   }
 
-  private async auditImport(dryRun = false) {
+  private async auditImport(dryRun = false, force = false) {
     const localSchema = JSON.parse(readFileSync(this.configPath, "utf8"));
     await this.auditManager.auditImportOperation(
       "schema",
@@ -66,7 +66,7 @@ export class SchemaManager extends BaseConfigManager<DirectusSchema> {
       localSchema,
       async () => await this.fetchRemoteSchema(),
       async () => {
-        await this.handleImporSchema();
+        await this.handleImporSchema(force);
         return {
           status: "success",
           message: "Schema imported successfully.",
@@ -77,10 +77,11 @@ export class SchemaManager extends BaseConfigManager<DirectusSchema> {
   }
 
   public async importConfig(
-    dryRun = false
+    dryRun = false,
+    force = false
   ): Promise<{ status: "success" | "failure"; message?: string }> {
     try {
-      await this.auditImport(dryRun);
+      await this.auditImport(dryRun, force);
       if (!dryRun) {
         console.log("Schema imported successfully.");
       } else {
@@ -95,15 +96,21 @@ export class SchemaManager extends BaseConfigManager<DirectusSchema> {
 
   // Legacy method names for backward compatibility
   exportSchema = () => this.exportConfig();
-  importSchema = (dryRun?: boolean) => this.importConfig(dryRun);
+  importSchema = (dryRun?: boolean, force?: boolean) => this.importConfig(dryRun, force);
 
-  private async handleImporSchema() {
+  private async handleImporSchema(force = false) {
     try {
       const vcSchema = JSON.parse(readFileSync(this.configPath, "utf8"));
 
       console.log("Checking schema differences...");
       // check schema differences
-      const diffSchema = await client.request(schemaDiff(vcSchema));
+      let diffSchema: any;
+      if (force) {
+        // When force is enabled, use axios to get diff with force query parameter
+        diffSchema = await callDirectusAPI("schema/diff?force=true", "POST", vcSchema);
+      } else {
+        diffSchema = await client.request(schemaDiff(vcSchema));
+      }
 
       if (_.isEmpty(diffSchema)) {
         console.log("No schema differences found.");
@@ -111,8 +118,14 @@ export class SchemaManager extends BaseConfigManager<DirectusSchema> {
       }
 
       console.log("Applying schema differences...");
-      // apply schema differences
-      await client.request(schemaApply(diffSchema));
+      if (force) {
+        console.log("Using --force flag to bypass version and vendor checks.");
+        // When force is enabled, use axios to apply schema with force query parameter
+        await callDirectusAPI("schema/apply?force=true", "POST", diffSchema);
+      } else {
+        // Normal schema apply without force
+        await client.request(schemaApply(diffSchema));
+      }
     } catch (error: any) {
       // Handle connection errors with detailed messages
       if (

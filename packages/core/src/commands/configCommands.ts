@@ -48,6 +48,7 @@ export function registerConfigCommands(program: Command) {
     .description("Import configuration")
     .argument("<type>", "Type of configuration to import", validateType)
     .option("--dry-run", "Preview changes without applying them")
+    .option("--force", "Force schema sync, bypassing version and vendor checks (schema only)")
     .action(async (type: ConfigType, options) => {
       try {
         const manager = managers[type];
@@ -58,7 +59,12 @@ export function registerConfigCommands(program: Command) {
             }` as keyof BaseManager
           ];
         if (typeof importMethod === "function") {
-          await (importMethod as any)(options.dryRun);
+          // For schema imports, pass both dryRun and force flags
+          if (type === "schema") {
+            await (importMethod as any)(options.dryRun, options.force);
+          } else {
+            await (importMethod as any)(options.dryRun);
+          }
         } else {
           throw new Error(`Import not implemented for type: ${type}`);
         }
@@ -102,6 +108,7 @@ export function registerConfigCommands(program: Command) {
     .command("import-all")
     .description("Import all configurations in sequence")
     .option("--continue-on-error", "Continue import sequence if one type fails")
+    .option("--force", "Force schema sync, bypassing version and vendor checks")
     .action(async (options) => {
       console.log("Running sync sequence:", SYNC_SEQUENCE.join(" -> "));
       const results: Record<string, { success: boolean; error?: any }> = {};
@@ -116,7 +123,12 @@ export function registerConfigCommands(program: Command) {
           ];
         if (typeof importMethod === "function") {
           try {
-            await importMethod();
+            // For schema imports, pass the force flag
+            if (type === "schema") {
+              await (importMethod as any)(false, options.force);
+            } else {
+              await importMethod();
+            }
             console.log(`✅ Successfully imported ${type}`);
             results[type] = { success: true };
           } catch (error: any) {
