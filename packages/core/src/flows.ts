@@ -332,4 +332,8 @@ export class FlowsManager extends BaseConfigManager<DirectusFlow> {
       return { status: "failure", message: error.message };
     }
   }
+
+  // Wrapper methods for backward compatibility with the command system
+  exportFlows = () => this.exportConfig();
+  importFlows = (dryRun?: boolean) => this.importConfig(dryRun);
 }
