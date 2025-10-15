@@ -2,9 +2,6 @@ import {
   createPermission,
   createPolicy,
   createRole,
-  deletePermissions,
-  deletePolicies,
-  deleteRoles,
   readMe,
   readPermissions,
   readPolicies,
@@ -76,6 +73,43 @@ interface Defaults {
   publicPolicyId?: string;
 }
 
+interface ValidationResult {
+  errors: string[];
+  warnings: string[];
+}
+
+interface SyncStats {
+  created: number;
+  updated: number;
+  skipped: number;
+  pendingDelete: number;
+  errors: number;
+}
+
+interface SyncResult<T = any> {
+  stats: SyncStats;
+  pendingDeletion: T[];
+}
+
+interface RolesSyncResult extends SyncResult<DirectusRole> {
+  roleIdMap: Map<string, string>;
+}
+
+interface AccessSyncResult extends SyncResult<Record<string, any>> {
+  warnings: string[];
+}
+
+interface PermissionsSyncResult extends SyncResult<Record<string, any>> {
+  warnings: string[];
+}
+
+interface ImportResults {
+  roles: RolesSyncResult;
+  policies: SyncResult<Record<string, any>>;
+  access: AccessSyncResult;
+  permissions: PermissionsSyncResult;
+}
+
 export class RolesManager extends BaseConfigManager<DirectusRole> {
   protected readonly configType = "roles";
   protected readonly defaultFilename = "roles.json";
@@ -98,6 +132,230 @@ export class RolesManager extends BaseConfigManager<DirectusRole> {
       "roles.json",
       "permissions.json"
     );
+  }
+
+  private loadLocalConfig() {
+    try {
+      const roles = JSON.parse(readFileSync(this.configPath, "utf8"));
+      const policies = JSON.parse(readFileSync(this.policiesPath, "utf8"));
+      const access = JSON.parse(readFileSync(this.accessPath, "utf8"));
+      const permissions = JSON.parse(
+        readFileSync(this.permissionsPath, "utf8")
+      );
+      return { roles, policies, access, permissions };
+    } catch (error: any) {
+      throw new Error(
+        `Failed to read local configuration: ${error?.message || error}`
+      );
+    }
+  }
+
+  protected validateLocalConfig(
+    roles: any,
+    policies: any,
+    access: any,
+    permissions: any
+  ): ValidationResult {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    if (!Array.isArray(roles)) {
+      errors.push("roles.json must contain an array");
+    }
+    if (!Array.isArray(policies)) {
+      errors.push("policies.json must contain an array");
+    }
+    if (!Array.isArray(access)) {
+      errors.push("access.json must contain an array");
+    }
+    if (!Array.isArray(permissions)) {
+      errors.push("permissions.json must contain an array");
+    }
+
+    if (
+      !Array.isArray(roles) ||
+      !Array.isArray(policies) ||
+      !Array.isArray(access) ||
+      !Array.isArray(permissions)
+    ) {
+      return { errors, warnings };
+    }
+
+    const roleIds = new Set<string>();
+    const policyIds = new Set<string>();
+
+    roles.forEach((role: any, index: number) => {
+      if (!role.id || typeof role.id !== "string") {
+        errors.push(`Role at index ${index} is missing a valid "id".`);
+      } else if (roleIds.has(role.id)) {
+        errors.push(`Duplicate role id detected: ${role.id}`);
+      } else {
+        roleIds.add(role.id);
+      }
+
+      if (!role.name) {
+        warnings.push(`Role ${role.id || index} is missing a name.`);
+      }
+    });
+
+    policies.forEach((policy: any, index: number) => {
+      if (!policy.id || typeof policy.id !== "string") {
+        errors.push(`Policy at index ${index} is missing a valid "id".`);
+      } else if (policyIds.has(policy.id)) {
+        errors.push(`Duplicate policy id detected: ${policy.id}`);
+      } else {
+        policyIds.add(policy.id);
+      }
+
+      if (!policy.name) {
+        warnings.push(`Policy ${policy.id || index} is missing a name.`);
+      }
+    });
+
+    access.forEach((entry: any, index: number) => {
+      if (!entry.id || typeof entry.id !== "string") {
+        errors.push(
+          `Access entry at index ${index} is missing a valid "id".`
+        );
+      }
+      if (entry.role && !roleIds.has(entry.role)) {
+        warnings.push(
+          `Access entry ${entry.id} references unknown role "${entry.role}".`
+        );
+      }
+      if (entry.policy && !policyIds.has(entry.policy)) {
+        warnings.push(
+          `Access entry ${entry.id} references unknown policy "${entry.policy}".`
+        );
+      }
+    });
+
+    permissions.forEach((permission: any, index: number) => {
+      if (!permission.collection || !permission.action) {
+        errors.push(
+          `Permission at index ${index} must include "collection" and "action".`
+        );
+      }
+      if (permission.role && !roleIds.has(permission.role)) {
+        warnings.push(
+          `Permission ${permission.id ?? index} references unknown role "${permission.role}".`
+        );
+      }
+      if (permission.policy && !policyIds.has(permission.policy)) {
+        warnings.push(
+          `Permission ${permission.id ?? index} references unknown policy "${permission.policy}".`
+        );
+      }
+    });
+
+    return { errors, warnings };
+  }
+
+  private sanitizeRoleForWrite(
+    role: Record<string, any>,
+    options: { includeId?: boolean } = {}
+  ) {
+    const { includeId = false } = options;
+    const {
+      id,
+      name,
+      icon,
+      description,
+      ip_access,
+      enforce_tfa,
+      admin_access,
+      app_access,
+    } = role;
+    const payload: Record<string, any> = {
+      name,
+      icon,
+      description,
+      ip_access,
+      enforce_tfa,
+      admin_access,
+      app_access,
+    };
+    if (includeId) payload.id = id;
+    Object.keys(payload).forEach((key) => {
+      if (payload[key] === undefined) {
+        delete payload[key];
+      }
+    });
+    return payload;
+  }
+
+  private sanitizePolicyForWrite(
+    policy: Record<string, any>,
+    options: { includeId?: boolean } = {}
+  ) {
+    const { includeId = false } = options;
+    const {
+      id,
+      name,
+      description,
+      icon,
+      ip_access,
+      enforce_tfa,
+      admin_access,
+      app_access,
+      roles,
+      permissions,
+      users,
+      ...rest
+    } = policy;
+    const payload: Record<string, any> = {
+      name,
+      description,
+      icon,
+      ip_access,
+      enforce_tfa,
+      admin_access,
+      app_access,
+      ...rest,
+    };
+    if (includeId) payload.id = id;
+    Object.keys(payload).forEach((key) => {
+      if (payload[key] === undefined) {
+        delete payload[key];
+      }
+    });
+    return payload;
+  }
+
+  private sanitizeAccessForWrite(entry: Record<string, any>) {
+    const payload: Record<string, any> = { ...entry };
+    Object.keys(payload).forEach((key) => {
+      if (payload[key] === undefined) {
+        delete payload[key];
+      }
+    });
+    return payload;
+  }
+
+  private sanitizePermissionForWrite(
+    permission: Record<string, any>,
+    options: { includeId?: boolean } = {}
+  ) {
+    const { includeId = false } = options;
+    const payload: Record<string, any> = {
+      collection: permission.collection,
+      action: permission.action,
+      role: permission.role ?? null,
+      policy: permission.policy ?? null,
+      permissions: permission.permissions ?? null,
+      validation: permission.validation ?? null,
+      presets: permission.presets ?? null,
+      fields: permission.fields ?? null,
+    };
+    if (includeId && permission.id) {
+      payload.id = permission.id;
+    }
+    Object.keys(payload).forEach((key) => {
+      if (payload[key] === undefined) {
+        delete payload[key];
+      }
+    });
+    return payload;
   }
 
   private emptyPolicies(record: Record<string, any>) {
@@ -154,6 +412,37 @@ export class RolesManager extends BaseConfigManager<DirectusRole> {
   private prepareAccess(access: Record<string, any>[]): Record<string, any>[] {
     // Deep clone to avoid modifying original objects
     return access.map((entry) => ({ ...entry }));
+  }
+
+  private normalizeRole(role: any) {
+    const r = { ...role };
+    if (r["user_created"]) r["user_created"] = null;
+    if (r["policies"]) r["policies"] = [];
+    if (r["permissions"]) r["permissions"] = [];
+    if (r["roles"]) r["roles"] = [];
+    if (r["users"]) delete r["users"];
+    return r;
+  }
+
+  private normalizePolicy(policy: any) {
+    const p = { ...policy };
+    if (p["user_created"]) p["user_created"] = null;
+    if (p["roles"]) p["roles"] = [];
+    if (p["permissions"]) p["permissions"] = [];
+    if (p["users"]) delete p["users"];
+    return p;
+  }
+
+  private normalizeAccess(access: any) {
+    const a = { ...access };
+    if (a["user_created"]) a["user_created"] = null;
+    return a;
+  }
+
+  private normalizePermission(permission: any) {
+    const p = { ...permission };
+    if (p["user_created"]) p["user_created"] = null;
+    return p;
   }
 
   private async exportRolesData(defaults: Defaults) {
@@ -314,6 +603,544 @@ export class RolesManager extends BaseConfigManager<DirectusRole> {
     }
   };
 
+  private logSyncPreview(
+    label: string,
+    result: SyncResult,
+    warnings: string[] = []
+  ) {
+    const { stats, pendingDeletion } = result;
+    const summaryParts = [
+      `${stats.created} create`,
+      `${stats.updated} update`,
+      `${stats.skipped} unchanged`,
+    ];
+    if (stats.pendingDelete > 0) {
+      summaryParts.push(`${stats.pendingDelete} pending manual removal`);
+    }
+    if (stats.errors > 0) {
+      summaryParts.push(`${stats.errors} errors`);
+    }
+    console.log(`${label}: ${summaryParts.join(", ")}`);
+
+    warnings.forEach((warning) => console.warn(`⚠️ ${warning}`));
+
+    if (pendingDeletion.length > 0) {
+      const sampleIds = pendingDeletion
+        .slice(0, 5)
+        .map((item: any) => item.id || "<unknown>")
+        .join(", ");
+      console.warn(
+        `⚠️ ${label} not present in snapshot (${pendingDeletion.length}). Manual removal recommended. Sample: ${sampleIds}${
+          pendingDeletion.length > 5 ? "…" : ""
+        }`
+      );
+    }
+  }
+
+  private buildImportSummary(results: ImportResults) {
+    const roleSummary = [
+      `Roles → ${results.roles.stats.created} created`,
+      `${results.roles.stats.updated} updated`,
+      `${results.roles.stats.skipped} unchanged`,
+    ];
+    if (results.roles.stats.pendingDelete > 0) {
+      roleSummary.push(
+        `${results.roles.stats.pendingDelete} pending manual removal`
+      );
+    }
+
+    const policySummary = [
+      `Policies → ${results.policies.stats.created} created`,
+      `${results.policies.stats.updated} updated`,
+      `${results.policies.stats.skipped} unchanged`,
+    ];
+    if (results.policies.stats.pendingDelete > 0) {
+      policySummary.push(
+        `${results.policies.stats.pendingDelete} pending manual removal`
+      );
+    }
+
+    const accessSummary = [
+      `Access → ${results.access.stats.created} created`,
+      `${results.access.stats.updated} updated`,
+      `${results.access.stats.skipped} unchanged`,
+    ];
+    if (results.access.stats.pendingDelete > 0) {
+      accessSummary.push(
+        `${results.access.stats.pendingDelete} pending manual removal`
+      );
+    }
+
+    const permissionSummary = [
+      `Permissions → ${results.permissions.stats.created} created`,
+      `${results.permissions.stats.updated} updated`,
+      `${results.permissions.stats.skipped} unchanged`,
+    ];
+    if (results.permissions.stats.pendingDelete > 0) {
+      permissionSummary.push(
+        `${results.permissions.stats.pendingDelete} pending manual removal`
+      );
+    }
+
+    return `${roleSummary.join(", ")}; ${policySummary.join(", ")}; ${accessSummary.join(", ")}; ${permissionSummary.join(", ")}`;
+  }
+
+  private async fetchExistingData(): Promise<{
+    roles: DirectusRole[];
+    policies: Record<string, any>[];
+    access: Record<string, any>[];
+    permissions: Record<string, any>[];
+  }> {
+    const [roles, policies, access, permissions] = await Promise.all([
+      client.request(readRoles()) as Promise<DirectusRole[]>,
+      client.request(readPolicies()) as Promise<Record<string, any>[]>,
+      callDirectusAPI<Record<string, any>[]>(
+        "access?filter[user][_null]=true",
+        "GET"
+      ),
+      this.retrievePermissions(false) as Promise<Record<string, any>[]>,
+    ]);
+
+    return {
+      roles,
+      policies,
+      access: Array.isArray(access) ? access : [],
+      permissions,
+    };
+  }
+
+  private async syncRoles(
+    localRoles: Record<string, any>[],
+    existingRoles: DirectusRole[],
+    defaults: Defaults,
+    options: { simulate?: boolean } = {}
+  ): Promise<RolesSyncResult> {
+    const { simulate = false } = options;
+    const stats: SyncStats = {
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      pendingDelete: 0,
+      errors: 0,
+    };
+    const roleIdMap = this.mapSpecialRoles(localRoles, existingRoles);
+    const managedRoleIds = new Set<string>();
+
+    const rolesToExclude = new Set<string>(defaults.adminRoleIds);
+    if (defaults.defaultRole) {
+      rolesToExclude.add(defaults.defaultRole);
+    }
+
+    const filteredExistingRoles = existingRoles.filter(
+      (role) => !rolesToExclude.has(role.id)
+    );
+    const existingRoleMap = new Map(
+      filteredExistingRoles.map((role) => [role.id, role])
+    );
+
+    for (const role of localRoles) {
+      const mappedId = roleIdMap.get(role.id) || role.id;
+      roleIdMap.set(role.id, mappedId);
+
+      if (rolesToExclude.has(mappedId)) {
+        console.log(
+          `Skipping managed role ${role.name} (${role.id}) due to admin/default exclusion.`
+        );
+        continue;
+      }
+
+      managedRoleIds.add(mappedId);
+      const existing = existingRoleMap.get(mappedId);
+      const desiredNormalized = this.normalizeRole({ ...role, id: mappedId });
+
+      if (existing) {
+        const currentNormalized = this.normalizeRole(existing);
+        if (!_.isEqual(currentNormalized, desiredNormalized)) {
+          stats.updated++;
+          if (!simulate) {
+            try {
+              await client.request(
+                updateRole(mappedId, this.sanitizeRoleForWrite(role))
+              );
+            } catch (error: any) {
+              stats.errors++;
+              console.error(
+                `Error updating role ${role.name} (${mappedId}): ${
+                  error.message || error
+                }`
+              );
+            }
+          }
+        } else {
+          stats.skipped++;
+        }
+      } else {
+        stats.created++;
+        if (!simulate) {
+          try {
+            await client.request(
+              createRole(
+                this.sanitizeRoleForWrite(role, { includeId: true })
+              )
+            );
+          } catch (error: any) {
+            stats.errors++;
+            console.error(
+              `Error creating role ${role.name} (${role.id}): ${
+                error.message || error
+              }`
+            );
+          }
+        }
+      }
+    }
+
+    const pendingDeletion = filteredExistingRoles.filter(
+      (role) => !managedRoleIds.has(role.id)
+    );
+    stats.pendingDelete = pendingDeletion.length;
+
+    return { stats, pendingDeletion, roleIdMap };
+  }
+
+  private async syncPolicies(
+    localPolicies: Record<string, any>[],
+    existingPolicies: Record<string, any>[],
+    defaults: Defaults,
+    options: { simulate?: boolean } = {}
+  ): Promise<SyncResult<Record<string, any>>> {
+    const { simulate = false } = options;
+    const stats: SyncStats = {
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      pendingDelete: 0,
+      errors: 0,
+    };
+
+    const excludedPolicies = new Set<string>(defaults.defaultPolicy);
+    const systemPolicyIds = existingPolicies
+      .filter((p) => p.name?.startsWith("$t:"))
+      .map((p) => p.id);
+    systemPolicyIds.forEach((id) => excludedPolicies.add(id));
+
+    const filteredExistingPolicies = existingPolicies.filter(
+      (policy) => !excludedPolicies.has(policy.id) && !policy.admin_access
+    );
+    const existingPolicyMap = new Map(
+      filteredExistingPolicies.map((policy) => [policy.id, policy])
+    );
+
+    for (const policy of localPolicies) {
+      if (!policy.id || excludedPolicies.has(policy.id)) {
+        stats.skipped++;
+        continue;
+      }
+
+      const existing = existingPolicyMap.get(policy.id);
+      const desiredNormalized = this.normalizePolicy(policy);
+
+      if (existing) {
+        const currentNormalized = this.normalizePolicy(existing);
+        if (!_.isEqual(currentNormalized, desiredNormalized)) {
+          stats.updated++;
+          if (!simulate) {
+            try {
+              await client.request(
+                updatePolicy(policy.id, this.sanitizePolicyForWrite(policy))
+              );
+            } catch (error: any) {
+              stats.errors++;
+              console.error(
+                `Error updating policy ${policy.name} (${policy.id}): ${
+                  error.message || error
+                }`
+              );
+            }
+          }
+        } else {
+          stats.skipped++;
+        }
+      } else {
+        stats.created++;
+        if (!simulate) {
+          try {
+            await client.request(
+              createPolicy(
+                this.sanitizePolicyForWrite(policy, { includeId: true })
+              )
+            );
+          } catch (error: any) {
+            stats.errors++;
+            console.error(
+              `Error creating policy ${policy.name} (${policy.id}): ${
+                error.message || error
+              }`
+            );
+          }
+        }
+      }
+    }
+
+    const pendingDeletion = filteredExistingPolicies.filter(
+      (policy) =>
+        !localPolicies.some((local) => local.id === policy.id) &&
+        !excludedPolicies.has(policy.id)
+    );
+    stats.pendingDelete = pendingDeletion.length;
+
+    return { stats, pendingDeletion };
+  }
+
+  private async syncAccess(
+    localAccess: Record<string, any>[],
+    existingAccess: Record<string, any>[],
+    defaults: Defaults,
+    options: { simulate?: boolean; roleIdMap: Map<string, string> }
+  ): Promise<AccessSyncResult> {
+    const { simulate = false, roleIdMap } = options;
+    const stats: SyncStats = {
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      pendingDelete: 0,
+      errors: 0,
+    };
+    const warnings: string[] = [];
+
+    const excludedAccessIds = new Set<string>(defaults.defaultAccess);
+    const existingAccessMap = new Map(
+      existingAccess.map((entry) => [entry.id, entry])
+    );
+    const processedLocalAccess: Record<string, any>[] = localAccess.map((entry) => {
+      let mappedRole = entry.role;
+      if (mappedRole && roleIdMap.has(mappedRole)) {
+        mappedRole = roleIdMap.get(mappedRole)!;
+      } else if (mappedRole && !roleIdMap.has(mappedRole)) {
+        warnings.push(
+          `Access entry ${entry.id} references unknown role "${mappedRole}"`
+        );
+      }
+      return { ...entry, role: mappedRole };
+    });
+
+    const managedAccessIds = new Set<string>();
+
+    for (const entry of processedLocalAccess) {
+      if (!entry.id) {
+        warnings.push("Encountered access entry without an id; skipping.");
+        continue;
+      }
+
+      managedAccessIds.add(entry.id);
+
+      if (excludedAccessIds.has(entry.id)) {
+        stats.skipped++;
+        continue;
+      }
+
+      const existing = existingAccessMap.get(entry.id);
+      const desiredNormalized = this.normalizeAccess(entry);
+
+      if (existing) {
+        const currentNormalized = this.normalizeAccess(existing);
+        if (!_.isEqual(currentNormalized, desiredNormalized)) {
+          stats.updated++;
+          if (!simulate) {
+            try {
+              await callDirectusAPI(
+                `access/${entry.id}`,
+                "PATCH",
+                this.sanitizeAccessForWrite(entry)
+              );
+            } catch (error: any) {
+              stats.errors++;
+              console.error(
+                `Error updating access entry ${entry.id}: ${
+                  error.message || error
+                }`
+              );
+            }
+          }
+        } else {
+          stats.skipped++;
+        }
+      } else {
+        stats.created++;
+        if (!simulate) {
+          try {
+            await callDirectusAPI(
+              "access",
+              "POST",
+              this.sanitizeAccessForWrite(entry)
+            );
+          } catch (error: any) {
+            stats.errors++;
+            console.error(
+              `Error creating access entry ${entry.id}: ${
+                error.message || error
+              }`
+            );
+          }
+        }
+      }
+    }
+
+    const pendingDeletion = existingAccess.filter((entry) => {
+      if (excludedAccessIds.has(entry.id)) return false;
+      if (entry.user) return false;
+      return !managedAccessIds.has(entry.id);
+    });
+    stats.pendingDelete = pendingDeletion.length;
+
+    return { stats, pendingDeletion, warnings };
+  }
+
+  private async syncPermissions(
+    localPermissions: Record<string, any>[],
+    existingPermissions: Record<string, any>[],
+    options: { simulate?: boolean; roleIdMap: Map<string, string> } = {
+      roleIdMap: new Map(),
+    }
+  ): Promise<PermissionsSyncResult> {
+    const { simulate = false, roleIdMap } = options;
+    const stats: SyncStats = {
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      pendingDelete: 0,
+      errors: 0,
+    };
+    const warnings: string[] = [];
+
+    const processedLocalPermissions: Record<string, any>[] = localPermissions.map((permission) => {
+      if (permission.role && roleIdMap.has(permission.role)) {
+        return { ...permission, role: roleIdMap.get(permission.role) };
+      }
+      if (permission.role && !roleIdMap.has(permission.role)) {
+        warnings.push(
+          `Permission entry ${permission.id ?? "<no-id>"} references unknown role "${permission.role}".`
+        );
+      }
+      return permission;
+    });
+
+    const localByKey = new Map<string, Record<string, any>>();
+    processedLocalPermissions.forEach((permission) => {
+      localByKey.set(this.getPermissionKey(permission), permission);
+    });
+
+    const existingByKey = new Map<string, Record<string, any>>();
+    existingPermissions.forEach((permission) => {
+      existingByKey.set(this.getPermissionKey(permission), permission);
+    });
+
+    const pendingDeletion: Record<string, any>[] = [];
+    for (const [key, remote] of existingByKey.entries()) {
+      if (!localByKey.has(key)) {
+        pendingDeletion.push(remote);
+      }
+    }
+    stats.pendingDelete = pendingDeletion.length;
+
+    for (const [key, desired] of localByKey.entries()) {
+      const existing = existingByKey.get(key);
+      if (existing) {
+        const currentNormalized = this.normalizePermission(existing);
+        const desiredNormalized = this.normalizePermission(desired);
+        if (!_.isEqual(currentNormalized, desiredNormalized)) {
+          stats.updated++;
+          if (!simulate) {
+            try {
+              await callDirectusAPI(
+                `permissions/${existing.id}`,
+                "PATCH",
+                this.sanitizePermissionForWrite(desired)
+              );
+            } catch (error: any) {
+              stats.errors++;
+              console.error(
+                `Error updating permission ${existing.id}: ${
+                  error.message || error
+                }`
+              );
+            }
+          }
+        } else {
+          stats.skipped++;
+        }
+      } else {
+        stats.created++;
+        if (!simulate) {
+          try {
+            await client.request(
+              createPermission(
+                this.sanitizePermissionForWrite(desired, { includeId: false })
+              )
+            );
+          } catch (error: any) {
+            stats.errors++;
+            console.error(
+              `Error creating permission for ${desired.collection}/${desired.action}: ${
+                error.message || error
+              }`
+            );
+          }
+        }
+      }
+    }
+
+    return { stats, pendingDeletion, warnings };
+  }
+
+  private async performSync(
+    local: {
+      roles: Record<string, any>[];
+      policies: Record<string, any>[];
+      access: Record<string, any>[];
+      permissions: Record<string, any>[];
+    },
+    defaults: Defaults,
+    existing: {
+      roles: DirectusRole[];
+      policies: Record<string, any>[];
+      access: Record<string, any>[];
+      permissions: Record<string, any>[];
+    },
+    options: { simulate?: boolean } = {}
+  ): Promise<ImportResults> {
+    const rolesResult = await this.syncRoles(
+      local.roles,
+      existing.roles,
+      defaults,
+      options
+    );
+    const policiesResult = await this.syncPolicies(
+      local.policies,
+      existing.policies,
+      defaults,
+      options
+    );
+    const accessResult = await this.syncAccess(
+      local.access,
+      existing.access,
+      defaults,
+      { ...options, roleIdMap: rolesResult.roleIdMap }
+    );
+    const permissionsResult = await this.syncPermissions(
+      local.permissions,
+      existing.permissions,
+      { ...options, roleIdMap: rolesResult.roleIdMap }
+    );
+
+    return {
+      roles: rolesResult,
+      policies: policiesResult,
+      access: accessResult,
+      permissions: permissionsResult,
+    };
+  }
+
   /**
    * Handle role mapping specially for roles like Public that may have different IDs
    * between environments but need to be treated as the same role
@@ -342,381 +1169,9 @@ export class RolesManager extends BaseConfigManager<DirectusRole> {
     return roleMap;
   }
 
-  private async handleImportRoles() {
-    const defaults = await this.retrieveDefaults();
-    const incomingRoles = JSON.parse(readFileSync(this.configPath, "utf8"));
-    const existingRoles = await client.request(readRoles());
-
-    // Map special roles (like Public) that may have different IDs between environments
-    const roleIdMap = this.mapSpecialRoles(incomingRoles, existingRoles);
-
-    // Prepare roles like during export
-    const preparedIncomingRoles = this.prepareRoles(incomingRoles);
-    const preparedExistingRoles = this.prepareRoles(
-      existingRoles.filter((r) => !defaults.adminRoleIds.includes(r.id))
-    );
-
-    // Log which roles are being processed
-    console.log(`Processing ${incomingRoles.length} roles for import`);
-
-    // Track processed roles for analytics
-    const stats = {
-      created: 0,
-      updated: 0,
-      skipped: 0,
-      errors: 0,
-    };
-
-    for (const role of incomingRoles) {
-      try {
-        // Check if this role is mapped to an existing role with a different ID
-        const targetRoleId = roleIdMap.get(role.id) || role.id;
-
-        // Skip if this is an admin role we're trying to import
-        const isAdminRole = defaults.adminRoleIds.includes(role.id);
-        if (isAdminRole) {
-          console.log(`Skipping admin role: ${role.name} (${role.id})`);
-          stats.skipped++;
-          continue;
-        }
-
-        // Look for existing role by target ID
-        const existingRole = existingRoles.find((r) => r.id === targetRoleId);
-
-        if (existingRole) {
-          // Compare prepared versions
-          const preparedExisting = preparedExistingRoles.find(
-            (r) => r.id === existingRole.id
-          );
-          const preparedIncoming = preparedIncomingRoles.find(
-            (r) => r.id === role.id
-          );
-
-          if (!_.isEqual(preparedExisting, preparedIncoming)) {
-            console.log(`Updating role: ${role.name} (${role.id})`);
-            await client.request(
-              updateRole(targetRoleId, {
-                ...role,
-                id: targetRoleId, // Ensure we're updating with the mapped ID if applicable
-              })
-            );
-            stats.updated++;
-          } else {
-            console.log(`Role unchanged, skipping: ${role.name} (${role.id})`);
-            stats.skipped++;
-          }
-        } else {
-          console.log(`Creating new role: ${role.name} (${role.id})`);
-          await client.request(createRole(role));
-          stats.created++;
-        }
-      } catch (error: any) {
-        console.error(
-          `Error processing role ${role.name} (${role.id}): ${error.message}`
-        );
-        stats.errors++;
-      }
-    }
-
-    console.log(
-      `Role import complete: ${stats.created} created, ${stats.updated} updated, ${stats.skipped} skipped, ${stats.errors} errors`
-    );
-
-    // Be more conservative about deleting roles - only delete non-admin roles that aren't in the source
-    const rolesToDelete = _.differenceBy(
-      existingRoles,
-      incomingRoles,
-      "id"
-    ).filter((r) => {
-      // Skip admin roles and default roles
-      const isAdmin = defaults.adminRoleIds.includes(r.id);
-      const isDefault = r.id === defaults.defaultRole;
-      // Skip roles that are targets in the mapping
-      const isMappedRole = Array.from(roleIdMap.values()).includes(r.id);
-
-      return !isAdmin && !isDefault && !isMappedRole;
-    });
-
-    if (rolesToDelete.length) {
-      console.log(
-        `Removing ${rolesToDelete.length} roles that are not in source:`
-      );
-      rolesToDelete.forEach((r) => console.log(`- ${r.name} (${r.id})`));
-
-      await client.request(deleteRoles(rolesToDelete.map((r) => r.id)));
-    } else {
-      console.log("No roles to delete");
-    }
-  }
-
-  private async handleImportPolicies() {
-    const defaults = await this.retrieveDefaults();
-    const incomingPolicies = JSON.parse(
-      readFileSync(this.policiesPath, "utf8")
-    );
-    const existingPolicies = await client.request(readPolicies());
-
-    // Filter and prepare policies using the same transformations as in export
-    const preparedIncomingPolicies = this.preparePolicies(incomingPolicies);
-    const preparedExistingPolicies = this.preparePolicies(
-      existingPolicies.filter((p) => !defaults.defaultPolicy.includes(p.id))
-    );
-
-    // Log the policies being processed
-    console.log(`Processing ${incomingPolicies.length} policies for import`);
-
-    // Track processed policies for analytics
-    const stats = {
-      created: 0,
-      updated: 0,
-      skipped: 0,
-      errors: 0,
-    };
-
-    // Determine which policies are system-managed
-    const systemPolicyIds = existingPolicies
-      .filter((p) => p.name?.startsWith("$t:"))
-      .map((p) => p.id);
-
-    for (const policy of incomingPolicies) {
-      try {
-        // Skip system policies
-        if (
-          systemPolicyIds.includes(policy.id) ||
-          defaults.defaultPolicy.includes(policy.id) ||
-          policy.admin_access === true
-        ) {
-          console.log(
-            `Skipping system/admin policy: ${policy.name} (${policy.id})`
-          );
-          stats.skipped++;
-          continue;
-        }
-
-        const existingPolicy = existingPolicies.find((p) => p.id === policy.id);
-
-        if (existingPolicy) {
-          // Compare prepared versions from the arrays
-          const preparedExisting = preparedExistingPolicies.find(
-            (p) => p.id === policy.id
-          );
-          const preparedIncoming = preparedIncomingPolicies.find(
-            (p) => p.id === policy.id
-          );
-
-          if (!_.isEqual(preparedExisting, preparedIncoming)) {
-            console.log(`Updating policy: ${policy.name} (${policy.id})`);
-            await client.request(updatePolicy(policy.id, policy));
-            stats.updated++;
-          } else {
-            console.log(
-              `Policy unchanged, skipping: ${policy.name} (${policy.id})`
-            );
-            stats.skipped++;
-          }
-        } else {
-          console.log(`Creating new policy: ${policy.name} (${policy.id})`);
-          await client.request(createPolicy(policy));
-          stats.created++;
-        }
-      } catch (error: any) {
-        console.error(
-          `Error processing policy ${policy.name} (${policy.id}): ${error.message}`
-        );
-        stats.errors++;
-      }
-    }
-
-    console.log(
-      `Policy import complete: ${stats.created} created, ${stats.updated} updated, ${stats.skipped} skipped, ${stats.errors} errors`
-    );
-
-    // Be more conservative about deleting policies - only delete non-system policies
-    const policiesToDelete = _.differenceBy(
-      existingPolicies,
-      incomingPolicies,
-      "id"
-    ).filter((p) => {
-      // Skip default, system, and admin policies
-      const isDefault = defaults.defaultPolicy.includes(p.id);
-      const isSystem = p.name?.startsWith("$t:") || false;
-      const isAdmin = p.admin_access === true;
-
-      return !isDefault && !isSystem && !isAdmin;
-    });
-
-    if (policiesToDelete.length) {
-      console.log(
-        `Removing ${policiesToDelete.length} policies that are not in source:`
-      );
-      policiesToDelete.forEach((p) => console.log(`- ${p.name} (${p.id})`));
-
-      try {
-        await client.request(deletePolicies(policiesToDelete.map((p) => p.id)));
-      } catch (error) {
-        console.error("Error deleting policies:", error);
-        stats.errors++;
-      }
-    } else {
-      console.log("No policies to delete");
-    }
-  }
-
-  private async handleImportAccess() {
-    const defaults = await this.retrieveDefaults();
-    const incomingAccess = JSON.parse(readFileSync(this.accessPath, "utf8"));
-    const existingAccess = await callDirectusAPI<Record<string, any>[]>(
-      "access?filter[user][_null]=true",
-      "GET"
-    );
-
-    // Get role ID mappings (for Public role etc.)
-    const existingRoles = await client.request(readRoles());
-    const incomingRoles = JSON.parse(readFileSync(this.configPath, "utf8"));
-    const roleIdMap = this.mapSpecialRoles(incomingRoles, existingRoles);
-
-    console.log(
-      `Processing ${incomingAccess.length} access entries for import`
-    );
-
-    // Track stats for reporting
-    const stats = {
-      created: 0,
-      updated: 0,
-      skipped: 0,
-      deleted: 0,
-      errors: 0,
-    };
-
-    // Process each access entry with role mapping if needed
-    const processedIncomingAccess = incomingAccess.map(
-      (access: Record<string, any>) => {
-        if (access.role && roleIdMap.has(access.role)) {
-          const mappedRoleId = roleIdMap.get(access.role);
-          console.log(
-            `Mapping access entry role ID: ${access.role} -> ${mappedRoleId}`
-          );
-          return {
-            ...access,
-            role: mappedRoleId,
-          };
-        }
-        return access;
-      }
-    );
-
-    // Prepare access entries like during export
-    const preparedProcessedAccess = this.prepareAccess(processedIncomingAccess);
-    const preparedExistingAccess = this.prepareAccess(
-      existingAccess.filter((a) => !defaults.defaultAccess.includes(a.id))
-    );
-
-    // Create lookup map for quicker access
-    const existingAccessMap = new Map(existingAccess.map((a) => [a.id, a]));
-
-    // Process each access entry
-    for (const access of processedIncomingAccess) {
-      try {
-        // Skip default access entries
-        if (defaults.defaultAccess.includes(access.id)) {
-          console.log(`Skipping default access entry: ${access.id}`);
-          stats.skipped++;
-          continue;
-        }
-
-        const existingEntry = existingAccessMap.get(access.id);
-
-        if (existingEntry) {
-          // Compare prepared versions
-          const preparedExisting = preparedExistingAccess.find(
-            (a) => a.id === access.id
-          );
-          const preparedIncoming = preparedProcessedAccess.find(
-            (a) => a.id === access.id
-          );
-
-          if (!_.isEqual(preparedExisting, preparedIncoming)) {
-            console.log(`Updating access entry: ${access.id}`);
-            await callDirectusAPI(`access/${access.id}`, "PATCH", access);
-            stats.updated++;
-          } else {
-            console.log(`Access entry unchanged, skipping: ${access.id}`);
-            stats.skipped++;
-          }
-        } else {
-          console.log(`Creating new access entry: ${access.id}`);
-          await callDirectusAPI("access", "POST", access);
-          stats.created++;
-        }
-      } catch (error: any) {
-        console.error(
-          `Error processing access entry ${access.id}: ${error.message}`
-        );
-        stats.errors++;
-      }
-    }
-
-    console.log(
-      `Access import in progress: ${stats.created} created, ${stats.updated} updated, ${stats.skipped} skipped, ${stats.errors} errors`
-    );
-
-    // Delete access entries that are not in the source (excluding defaults and user-specific entries)
-    const accessToDelete = _.differenceBy(
-      existingAccess,
-      processedIncomingAccess,
-      "id"
-    ).filter((a) => {
-      // Don't delete default access entries or those with user associations
-      const isDefault = defaults.defaultAccess.includes(a.id);
-      const hasUser = !!a.user;
-
-      // Also don't delete system-critical entries (additional safety check)
-      const isSystemRole =
-        a.role &&
-        existingRoles.some(
-          (r) => r.id === a.role && defaults.adminRoleIds.includes(r.id)
-        );
-
-      return !isDefault && !hasUser && !isSystemRole;
-    });
-
-    if (accessToDelete.length) {
-      console.log(
-        `Removing ${accessToDelete.length} access entries that are not in source`
-      );
-      accessToDelete.forEach((a) => {
-        // Format a readable description of what's being deleted
-        const roleInfo = a.role
-          ? `role ${existingRoles.find((r) => r.id === a.role)?.name || a.role}`
-          : "no role";
-        const policyInfo = a.policy ? ` with policy ${a.policy}` : "";
-        console.log(`- Access entry ${a.id}: ${roleInfo}${policyInfo}`);
-      });
-
-      try {
-        await callDirectusAPI(
-          "access",
-          "DELETE",
-          accessToDelete.map((a) => a.id)
-        );
-        stats.deleted = accessToDelete.length;
-      } catch (error: any) {
-        console.error(`Error deleting access entries: ${error.message}`);
-        stats.errors++;
-      }
-    } else {
-      console.log("No access entries to delete");
-    }
-
-    console.log(
-      `Access import complete: ${stats.created} created, ${stats.updated} updated, ${stats.skipped} skipped, ${stats.deleted} deleted, ${stats.errors} errors`
-    );
-  }
-
-  /**
-   * Create a unique key for a permission that can be used for comparison
-   * instead of the auto-incremented ID
-   */
+  
+  
+  
   private getPermissionKey(permission: Record<string, any>): string {
     const { collection, action, policy, role } = permission;
     let identifier = [
@@ -748,245 +1203,94 @@ export class RolesManager extends BaseConfigManager<DirectusRole> {
     return hash.toString(16); // Convert to hex
   }
 
-  private async handleImportPermissions() {
-    // Get role ID mappings in case we have special roles
-    const existingRoles = await client.request(readRoles());
-    const incomingRoles = JSON.parse(readFileSync(this.configPath, "utf8"));
-    const roleIdMap = this.mapSpecialRoles(incomingRoles, existingRoles);
-
-    const sourcePermissions: Record<string, any>[] = JSON.parse(
-      readFileSync(this.permissionsPath, "utf8")
-    );
-    const incomingPermissions = await this.retrievePermissions(false);
-
-    console.log(
-      `Processing ${sourcePermissions.length} permissions for import`
+  
+  private async auditImport(dryRun = false): Promise<{
+    status: "success" | "failure";
+    message?: string;
+  }> {
+    const local = this.loadLocalConfig();
+    const validation = this.validateLocalConfig(
+      local.roles,
+      local.policies,
+      local.access,
+      local.permissions
     );
 
-    // Map permissions by our custom key for better comparison
-    const sourcePermissionsByKey = new Map<string, Record<string, any>>();
-    const incomingPermissionsByKey = new Map<string, Record<string, any>>();
+    validation.errors.forEach((error) => console.error(`❌ ${error}`));
+    validation.warnings.forEach((warning) => console.warn(`⚠️ ${warning}`));
 
-    // Process source permissions and map role IDs if needed
-    const processedSourcePermissions = sourcePermissions.map((permission) => {
-      // Check if this permission references a role that's been mapped
-      if (permission.role && roleIdMap.has(permission.role)) {
-        return {
-          ...permission,
-          role: roleIdMap.get(permission.role),
-        };
-      }
-      return permission;
-    });
-
-    // Build lookup maps
-    processedSourcePermissions.forEach((p) => {
-      sourcePermissionsByKey.set(this.getPermissionKey(p), p);
-    });
-
-    incomingPermissions.forEach((p) => {
-      incomingPermissionsByKey.set(this.getPermissionKey(p), p);
-    });
-
-    // Track stats for reporting
-    const stats = {
-      created: 0,
-      deleted: 0,
-      errors: 0,
-    };
-
-    // Delete permissions that exist in destination but not in source
-    const permissionsToDelete = [];
-
-    for (const [key, permission] of incomingPermissionsByKey.entries()) {
-      if (!sourcePermissionsByKey.has(key)) {
-        permissionsToDelete.push(permission.id);
-      }
-    }
-
-    if (permissionsToDelete.length) {
-      console.log(
-        `Deleting ${permissionsToDelete.length} permissions that are not in source`
-      );
-      try {
-        await client.request(deletePermissions(permissionsToDelete));
-        stats.deleted = permissionsToDelete.length;
-      } catch (error) {
-        console.error("Error deleting permissions:", error);
-        stats.errors++;
-      }
-    }
-
-    // Create permissions that exist in source but not in destination
-    for (const [key, permission] of sourcePermissionsByKey.entries()) {
-      if (!incomingPermissionsByKey.has(key)) {
-        try {
-          // Omit ID when creating new permissions as they are auto-incremented
-          const permissionToCreate = _.omit(permission, ["id"]);
-          await client.request(createPermission(permissionToCreate));
-          stats.created++;
-        } catch (error: any) {
-          console.error(
-            `Error creating permission for ${permission.collection}/${permission.action}: ${error.message}`
-          );
-          stats.errors++;
-        }
-      }
-    }
-
-    console.log(
-      `Permission import complete: ${stats.created} created, ${stats.deleted} deleted, ${stats.errors} errors`
-    );
-  }
-
-  normalizeRole(role: any) {
-    // Normalize a role for consistent comparison:
-    // 1. Nullify user_created field
-    // 2. Empty nested arrays (policies, permissions, roles)
-    // 3. Remove users array
-    const r = { ...role };
-    if (r["user_created"]) r["user_created"] = null;
-    if (r["policies"]) r["policies"] = [];
-    if (r["permissions"]) r["permissions"] = [];
-    if (r["roles"]) r["roles"] = [];
-    if (r["users"]) delete r["users"]; // Remove users array
-    return r;
-  }
-
-  normalizePolicy(policy: any) {
-    // Normalize a policy for consistent comparison:
-    // 1. Nullify user_created field
-    // 2. Empty nested arrays (roles, permissions)
-    // 3. Remove users array
-    const p = { ...policy };
-    if (p["user_created"]) p["user_created"] = null;
-    if (p["roles"]) p["roles"] = [];
-    if (p["permissions"]) p["permissions"] = [];
-    if (p["users"]) delete p["users"]; // Remove users array
-    return p;
-  }
-
-  normalizeAccess(access: any) {
-    // Nullify user_created for consistency
-    const a = { ...access };
-    if (a["user_created"]) a["user_created"] = null;
-    return a;
-  }
-
-  normalizePermission(permission: any) {
-    // Nullify user_created for consistency
-    const p = { ...permission };
-    if (p["user_created"]) p["user_created"] = null;
-    return p;
-  }
-
-  /**
-   * Fetches and filters remote roles, policies, access and permissions data
-   * IMPORTANT: This method applies the same filtering and transformations as the export methods to ensure
-   * that the diff/comparison only shows differences in the data that would actually
-   * be exported. It:
-   *
-   * 1. Excludes admin roles, default policies, and default access entries
-   * 2. Removes IDs from permissions for cross-environment portability
-   * 3. Removes user arrays from roles and policies
-   * 4. Empties nested arrays (permissions, roles, policies) to avoid circular references
-   * 5. Normalizes metadata fields like user_created
-   */
-  private async fetchRemoteRolesAndRelated() {
-    // Get defaults to apply consistent filtering (same as in export methods)
-    const defaults = await this.retrieveDefaults();
-
-    // Get and filter roles the same way as in exportRolesData()
-    const allRoles = await client.request(readRoles());
-    const rolesToExclude = [...defaults.adminRoleIds];
-    if (defaults.defaultRole) {
-      rolesToExclude.push(defaults.defaultRole);
-    }
-    const normalizedRoles = allRoles
-      .filter((r) => !rolesToExclude.includes(r.id))
-      .map((r) => this.normalizeRole(r));
-    // Apply the same preparations as in export to ensure consistency
-    const filteredRoles = this.prepareRoles(normalizedRoles);
-
-    // Get and filter policies the same way as in exportPoliciesData()
-    const allPolicies = await client.request(readPolicies());
-    const normalizedPolicies = allPolicies
-      .filter((p) => !defaults.defaultPolicy.includes(p.id))
-      .map((p) => this.normalizePolicy(p));
-    // Apply the same preparations as in export to ensure consistency
-    const filteredPolicies = this.preparePolicies(normalizedPolicies);
-
-    // Get and filter access the same way as in exportAccessData()
-    const allAccess = await callDirectusAPI<Record<string, any>[]>(
-      "access?filter[user][_null]=true",
-      "GET"
-    );
-    const filteredAccess = Array.isArray(allAccess)
-      ? allAccess
-          .filter((a) => !defaults.defaultAccess.includes(a.id))
-          .map((a) => this.normalizeAccess(a))
-      : [];
-
-    // Get permissions the same way as in exportPermissionsData()
-    const permissions = await this.retrievePermissions();
-
-    return {
-      roles: filteredRoles,
-      policies: filteredPolicies,
-      access: filteredAccess,
-      permissions: permissions,
-    };
-  }
-
-  private async auditImport(dryRun = false) {
-    // Read local data
-    const localRolesRaw = JSON.parse(readFileSync(this.configPath, "utf8"));
-    const localPoliciesRaw = JSON.parse(
-      readFileSync(this.policiesPath, "utf8")
-    );
-    const localAccessRaw = JSON.parse(readFileSync(this.accessPath, "utf8"));
-    const localPermissionsRaw = JSON.parse(
-      readFileSync(this.permissionsPath, "utf8")
-    );
-
-    // Normalize local data using the same transformations as during export
-    const localRoles = Array.isArray(localRolesRaw)
-      ? this.prepareRoles(localRolesRaw.map((r) => this.normalizeRole(r)))
-      : [];
-
-    const localPolicies = Array.isArray(localPoliciesRaw)
-      ? this.preparePolicies(
-          localPoliciesRaw.map((p) => this.normalizePolicy(p))
-        )
-      : [];
-
-    const localAccess = Array.isArray(localAccessRaw)
-      ? this.prepareAccess(localAccessRaw.map((a) => this.normalizeAccess(a)))
-      : [];
-
-    // No additional normalization needed for permissions
-    const localPermissions = Array.isArray(localPermissionsRaw)
-      ? localPermissionsRaw
-      : [];
-
-    // Create a normalized local data object
-    const normalizedLocalData = {
-      roles: localRoles,
-      policies: localPolicies,
-      access: localAccess,
-      permissions: localPermissions,
-    };
-
-    // Wrap remote fetch to normalize remote data the same way
-    const fetchAndNormalizeRemote = async () => {
-      const remote = await this.fetchRemoteRolesAndRelated();
-      // No additional preparation needed since filtering is now done in fetchRemoteRolesAndRelated
+    if (validation.errors.length > 0) {
       return {
-        roles: remote.roles,
-        policies: remote.policies,
-        access: remote.access,
-        permissions: remote.permissions,
+        status: "failure",
+        message: `Validation failed with ${validation.errors.length} error(s).`,
       };
+    }
+
+    const defaults = await this.retrieveDefaults();
+    const existing = await this.fetchExistingData();
+
+    const normalizedLocalData = {
+      roles: Array.isArray(local.roles)
+        ? this.prepareRoles(local.roles.map((r) => this.normalizeRole(r)))
+        : [],
+      policies: Array.isArray(local.policies)
+        ? this.preparePolicies(
+            local.policies.map((p) => this.normalizePolicy(p))
+          )
+        : [],
+      access: Array.isArray(local.access)
+        ? this.prepareAccess(local.access.map((a) => this.normalizeAccess(a)))
+        : [],
+      permissions: Array.isArray(local.permissions)
+        ? local.permissions.map((p) => this.normalizePermission(p))
+        : [],
+    };
+
+    const fetchAndNormalizeRemote = async () => {
+      const latest = await this.fetchExistingData();
+      const filteredDefaults = await this.retrieveDefaults();
+      return {
+        roles: this.prepareRoles(
+          latest.roles
+            .filter((r) => !filteredDefaults.adminRoleIds.includes(r.id))
+            .map((r) => this.normalizeRole(r))
+        ),
+        policies: this.preparePolicies(
+          latest.policies
+            .filter((p) => !filteredDefaults.defaultPolicy.includes(p.id))
+            .map((p) => this.normalizePolicy(p))
+        ),
+        access: this.prepareAccess(
+          latest.access
+            .filter((a) => !filteredDefaults.defaultAccess.includes(a.id))
+            .map((a) => this.normalizeAccess(a))
+        ),
+        permissions: latest.permissions.map((p) =>
+          this.normalizePermission(p)
+        ),
+      };
+    };
+
+    if (dryRun) {
+      const results = await this.performSync(local, defaults, existing, {
+        simulate: true,
+      });
+      this.logSyncPreview("Roles", results.roles);
+      this.logSyncPreview("Policies", results.policies);
+      this.logSyncPreview("Access", results.access, results.access.warnings);
+      this.logSyncPreview(
+        "Permissions",
+        results.permissions,
+        results.permissions.warnings
+      );
+      return {
+        status: "success",
+        message: "Dry run completed - no changes applied",
+      };
+    }
+
+    let outcome: { status: "success" | "failure"; message?: string } = {
+      status: "success",
     };
 
     await this.auditManager.auditImportOperation(
@@ -995,29 +1299,28 @@ export class RolesManager extends BaseConfigManager<DirectusRole> {
       normalizedLocalData,
       fetchAndNormalizeRemote,
       async () => {
-        await this.handleImportRoles();
-        await this.handleImportPolicies();
-        await this.handleImportAccess();
-        await this.handleImportPermissions();
-        return {
-          status: "success",
-          message:
-            "Roles, policies, access, and permissions imported successfully.",
-        };
+        const results = await this.performSync(local, defaults, existing, {
+          simulate: false,
+        });
+        const summary = this.buildImportSummary(results);
+        outcome = { status: "success", message: summary };
+        return outcome;
       },
-      dryRun
+      false
     );
+
+    return outcome;
   }
 
   importRoles = async (dryRun = false) => {
-    await this.auditImport(dryRun);
-    if (!dryRun) {
-      console.log(
-        "Roles, policies, access and permissions imported successfully."
-      );
-    } else {
-      console.log("[Dry Run] Import preview complete. No changes applied.");
+    const result = await this.auditImport(dryRun);
+    if (result.status === "failure") {
+      throw new Error(result.message || "Import failed");
     }
+    if (result.message) {
+      console.log(result.message);
+    }
+    return result;
   };
 
   // --- Add/restore retrieveDefaults and retrievePermissions as arrow functions ---
@@ -1103,8 +1406,11 @@ export class RolesManager extends BaseConfigManager<DirectusRole> {
     dryRun = false
   ): Promise<{ status: "success" | "failure"; message?: string }> {
     try {
-      await this.importRoles(dryRun);
-      return { status: "success", message: "Roles imported successfully." };
+      const result = await this.importRoles(dryRun);
+      return {
+        status: "success",
+        message: result.message || "Roles imported successfully.",
+      };
     } catch (error: any) {
       return { status: "failure", message: error.message };
     }
