@@ -1,14 +1,11 @@
-import {
-  createFlow,
-  createOperation,
-  deleteFlows,
-  deleteOperations,
-  readFlows,
-  readOperations,
-  updateFlow,
-} from "@directus/sdk";
+import { readFlows, readOperations } from "@directus/sdk";
 import { writeFileSync, readFileSync } from "fs";
-import { client, ensureConfigDirs } from "./helper";
+import {
+  callDirectusAPI,
+  client,
+  ensureConfigDirs,
+  retryOperation,
+} from "./helper";
 import _ from "lodash";
 import {
   BaseConfigManager,
@@ -29,6 +26,23 @@ interface DirectusFlow {
   name: string;
   operations?: DirectusOperation[];
   [key: string]: any;
+}
+
+interface ValidationResult {
+  errors: string[];
+  warnings: string[];
+}
+
+interface SyncStats {
+  created: number;
+  updated: number;
+  skipped: number;
+  pendingDelete: number;
+}
+
+interface SyncResult<T> {
+  stats: SyncStats;
+  pendingDeletion: T[];
 }
 
 /**
@@ -100,6 +114,335 @@ export class FlowsManager extends BaseConfigManager<DirectusFlow> {
       "operations.json"
     );
     this.operationsManager = new OperationsManager();
+  }
+
+  protected validateLocalConfig(
+    flows: DirectusFlow[],
+    operations: DirectusOperation[]
+  ): ValidationResult {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    if (!Array.isArray(flows)) {
+      errors.push("Local flows configuration must be an array.");
+    }
+
+    if (!Array.isArray(operations)) {
+      errors.push("Local operations configuration must be an array.");
+    }
+
+    if (!Array.isArray(flows) || !Array.isArray(operations)) {
+      return { errors, warnings };
+    }
+
+    const flowIds = new Set<string>();
+    const duplicateFlowIds = new Set<string>();
+
+    flows.forEach((flow, index) => {
+      if (!flow.id || typeof flow.id !== "string") {
+        errors.push(`Flow at index ${index} is missing a valid "id".`);
+        return;
+      }
+      if (flowIds.has(flow.id)) {
+        duplicateFlowIds.add(flow.id);
+      } else {
+        flowIds.add(flow.id);
+      }
+
+      if (!flow.name) {
+        warnings.push(`Flow ${flow.id} is missing a name.`);
+      }
+    });
+
+    duplicateFlowIds.forEach((id) => {
+      errors.push(`Duplicate flow id detected: ${id}`);
+    });
+
+    const operationIds = new Set<string>();
+    const duplicateOperationIds = new Set<string>();
+    operations.forEach((operation, index) => {
+      if (!operation.id || typeof operation.id !== "string") {
+        errors.push(`Operation at index ${index} is missing a valid "id".`);
+        return;
+      }
+      if (operationIds.has(operation.id)) {
+        duplicateOperationIds.add(operation.id);
+      } else {
+        operationIds.add(operation.id);
+      }
+
+      if (!operation.flow || typeof operation.flow !== "string") {
+        errors.push(
+          `Operation ${operation.id} does not reference a valid flow id.`
+        );
+      } else if (!flowIds.has(operation.flow)) {
+        errors.push(
+          `Operation ${operation.id} references unknown flow "${operation.flow}".`
+        );
+      }
+    });
+
+    duplicateOperationIds.forEach((id) => {
+      errors.push(`Duplicate operation id detected: ${id}`);
+    });
+
+    operations.forEach((operation) => {
+      if (operation.resolve && !operationIds.has(operation.resolve)) {
+        warnings.push(
+          `Operation ${operation.id} resolve references missing operation ${operation.resolve}.`
+        );
+      }
+      if (operation.reject && !operationIds.has(operation.reject)) {
+        warnings.push(
+          `Operation ${operation.id} reject references missing operation ${operation.reject}.`
+        );
+      }
+    });
+
+    return { errors, warnings };
+  }
+
+  private sanitizeFlowForWrite(
+    flow: DirectusFlow,
+    options: { includeId?: boolean } = {}
+  ): Record<string, any> {
+    const { includeId = false } = options;
+    const {
+      operations,
+      user_created,
+      user_updated,
+      date_created,
+      date_updated,
+      ...rest
+    } = flow;
+
+    const payload: Record<string, any> = { ...rest };
+
+    if (includeId) {
+      payload.id = flow.id;
+    }
+
+    Object.keys(payload).forEach((key) => {
+      if (payload[key] === undefined) {
+        delete payload[key];
+      }
+    });
+
+    return payload;
+  }
+
+  private sanitizeOperationForWrite(
+    operation: DirectusOperation,
+    options: { includeId?: boolean } = {}
+  ): Record<string, any> {
+    const { includeId = false } = options;
+    const {
+      user_created,
+      user_updated,
+      date_created,
+      date_updated,
+      ...rest
+    } = operation;
+
+    const payload: Record<string, any> = { ...rest, flow: operation.flow };
+
+    if (includeId) {
+      payload.id = operation.id;
+    }
+
+    Object.keys(payload).forEach((key) => {
+      if (payload[key] === undefined) {
+        delete payload[key];
+      }
+    });
+
+    return payload;
+  }
+
+  private normalizeFlowForComparison(flow: DirectusFlow): Record<string, any> {
+    return this.sanitizeFlowForWrite(flow, { includeId: true });
+  }
+
+  private normalizeOperationForComparison(
+    operation: DirectusOperation
+  ): Record<string, any> {
+    return this.sanitizeOperationForWrite(operation, { includeId: true });
+  }
+
+  private logSyncPreview<T extends { id?: string }>(
+    label: string,
+    result: SyncResult<T>
+  ) {
+    const { stats, pendingDeletion } = result;
+    const summaryParts = [
+      `${stats.created} create`,
+      `${stats.updated} update`,
+      `${stats.skipped} unchanged`,
+    ];
+    if (stats.pendingDelete > 0) {
+      summaryParts.push(`${stats.pendingDelete} pending manual removal`);
+    }
+    console.log(`${label}: ${summaryParts.join(", ")}`);
+
+    if (pendingDeletion.length > 0) {
+      const sampleIds = pendingDeletion
+        .slice(0, 5)
+        .map((item) => item.id || "<unknown>")
+        .join(", ");
+      console.warn(
+        `⚠️ ${label} not present in snapshot (${pendingDeletion.length}). No automatic deletion performed. Sample: ${sampleIds}${
+          pendingDeletion.length > 5 ? "…" : ""
+        }`
+      );
+    }
+  }
+
+  private buildImportSummary(
+    flowStats: SyncStats,
+    operationStats: SyncStats
+  ): string {
+    const flowSummary = [
+      `Flows → ${flowStats.created} created`,
+      `${flowStats.updated} updated`,
+      `${flowStats.skipped} unchanged`,
+    ];
+    if (flowStats.pendingDelete > 0) {
+      flowSummary.push(`${flowStats.pendingDelete} pending manual removal`);
+    }
+
+    const operationSummary = [
+      `Operations → ${operationStats.created} created`,
+      `${operationStats.updated} updated`,
+      `${operationStats.skipped} unchanged`,
+    ];
+    if (operationStats.pendingDelete > 0) {
+      operationSummary.push(
+        `${operationStats.pendingDelete} pending manual removal`
+      );
+    }
+
+    return `${flowSummary.join(", ")}; ${operationSummary.join(", ")}`;
+  }
+
+  private async syncFlows(
+    localFlows: DirectusFlow[],
+    existingFlows: DirectusFlow[],
+    options: { simulate?: boolean } = {}
+  ): Promise<SyncResult<DirectusFlow>> {
+    const { simulate = false } = options;
+    const stats: SyncStats = {
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      pendingDelete: 0,
+    };
+
+    const existingMap = new Map(existingFlows.map((flow) => [flow.id, flow]));
+    const managedFlowIds = new Set<string>();
+
+    for (const flow of localFlows) {
+      managedFlowIds.add(flow.id);
+      const existing = existingMap.get(flow.id);
+      const desired = this.normalizeFlowForComparison(flow);
+
+      if (existing) {
+        const current = this.normalizeFlowForComparison(existing);
+        if (!_.isEqual(current, desired)) {
+          stats.updated++;
+          if (!simulate) {
+            const payload = this.sanitizeFlowForWrite(flow);
+            await retryOperation(() =>
+              callDirectusAPI(`flows/${flow.id}`, "PATCH", payload)
+            );
+          }
+        } else {
+          stats.skipped++;
+        }
+      } else {
+        stats.created++;
+        if (!simulate) {
+          const payload = this.sanitizeFlowForWrite(flow, { includeId: true });
+          await retryOperation(() =>
+            callDirectusAPI("flows", "POST", payload)
+          );
+        }
+      }
+    }
+
+    const pendingDeletion = existingFlows.filter(
+      (flow) => !managedFlowIds.has(flow.id)
+    );
+    stats.pendingDelete = pendingDeletion.length;
+
+    return { stats, pendingDeletion };
+  }
+
+  private async syncOperations(
+    operations: DirectusOperation[],
+    existingOperations: DirectusOperation[],
+    options: { simulate?: boolean; managedFlowIds?: Set<string> } = {}
+  ): Promise<SyncResult<DirectusOperation>> {
+    const { simulate = false, managedFlowIds } = options;
+    const stats: SyncStats = {
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      pendingDelete: 0,
+    };
+
+    const existingMap = new Map(
+      existingOperations.map((operation) => [operation.id, operation])
+    );
+    const managedOperationIds = new Set<string>();
+
+    for (const operation of operations) {
+      managedOperationIds.add(operation.id);
+
+      if (managedFlowIds && !managedFlowIds.has(operation.flow)) {
+        console.warn(
+          `⚠️ Operation ${operation.id} references unmanaged flow ${operation.flow}; skipping.`
+        );
+        continue;
+      }
+
+      const desired = this.normalizeOperationForComparison(operation);
+      const existing = existingMap.get(operation.id);
+
+      if (existing) {
+        const current = this.normalizeOperationForComparison(existing);
+        if (!_.isEqual(current, desired)) {
+          stats.updated++;
+          if (!simulate) {
+            const payload = this.sanitizeOperationForWrite(operation);
+            await retryOperation(() =>
+              callDirectusAPI(`operations/${operation.id}`, "PATCH", payload)
+            );
+          }
+        } else {
+          stats.skipped++;
+        }
+      } else {
+        stats.created++;
+        if (!simulate) {
+          const payload = this.sanitizeOperationForWrite(operation, {
+            includeId: true,
+          });
+          await retryOperation(() =>
+            callDirectusAPI("operations", "POST", payload)
+          );
+        }
+      }
+    }
+
+    const pendingDeletion = existingOperations.filter((operation) => {
+      const belongsToManagedFlow = managedFlowIds
+        ? managedFlowIds.has(operation.flow)
+        : true;
+      return belongsToManagedFlow && !managedOperationIds.has(operation.id);
+    });
+    stats.pendingDelete = pendingDeletion.length;
+
+    return { stats, pendingDeletion };
   }
 
   /**
@@ -253,7 +596,6 @@ export class FlowsManager extends BaseConfigManager<DirectusFlow> {
     dryRun = false
   ): Promise<{ status: "success" | "failure"; message?: string }> {
     try {
-      // Load local configuration
       const localFlows: DirectusFlow[] = JSON.parse(
         readFileSync(this.configPath, "utf8")
       );
@@ -261,74 +603,90 @@ export class FlowsManager extends BaseConfigManager<DirectusFlow> {
         readFileSync(this.operationPath, "utf8")
       );
 
-      // Sort operations by dependency to ensure proper import order
+      const validation = this.validateLocalConfig(localFlows, localOperations);
+      if (validation.errors.length > 0) {
+        validation.errors.forEach((error) => console.error(`❌ ${error}`));
+        return {
+          status: "failure",
+          message: `Validation failed with ${validation.errors.length} error(s).`,
+        };
+      }
+
+      if (validation.warnings.length > 0) {
+        validation.warnings.forEach((warning) =>
+          console.warn(`⚠️ ${warning}`)
+        );
+      }
+
       const sortedOperations = this.sortOperationsByDependency(localOperations);
+      const managedFlowIds = new Set(localFlows.map((flow) => flow.id));
 
-      // Use audit manager for comprehensive import tracking
-      return new Promise((resolve) => {
-        this.auditManager
-          .auditImportOperation(
-            "flows",
-            "FlowsManager",
-            { flows: localFlows, operations: localOperations },
-            async () => {
-              const flows = await this.fetchRemoteData();
-              const operations = await this.fetchRemoteOperations();
-              return { flows, operations };
-            },
-            async () => {
-              if (dryRun) {
-                return {
-                  status: "success" as const,
-                  message: "Dry run completed - no changes applied",
-                };
-              }
+      const fetchRemoteState = async () => {
+        const [flows, operations] = await Promise.all([
+          this.fetchRemoteData(),
+          this.fetchRemoteOperations(),
+        ]);
+        return { flows, operations };
+      };
 
-              // Delete existing flows and operations
-              const existingFlows = await this.fetchRemoteData();
-              if (existingFlows.length > 0) {
-                await client.request(
-                  deleteFlows(existingFlows.map((f) => f.id))
-                );
-              }
+      if (dryRun) {
+        const remoteState = await fetchRemoteState();
+        const flowPreview = await this.syncFlows(localFlows, remoteState.flows, {
+          simulate: true,
+        });
+        const operationPreview = await this.syncOperations(
+          sortedOperations,
+          remoteState.operations,
+          { simulate: true, managedFlowIds }
+        );
+        this.logSyncPreview("Flows", flowPreview);
+        this.logSyncPreview("Operations", operationPreview);
+        return {
+          status: "success",
+          message: "Dry run completed - no changes applied",
+        };
+      }
 
-              const existingOperations = await this.fetchRemoteOperations();
-              if (existingOperations.length > 0) {
-                await client.request(
-                  deleteOperations(existingOperations.map((op) => op.id))
-                );
-              }
+      let outcome: { status: "success" | "failure"; message?: string } = {
+        status: "success",
+      };
 
-              // Import operations first (in dependency order)
-              for (const operation of sortedOperations) {
-                const { id, ...operationData } = operation;
-                await client.request(createOperation(operationData));
-              }
+      await this.auditManager.auditImportOperation(
+        "flows",
+        "FlowsManager",
+        { flows: localFlows, operations: localOperations },
+        fetchRemoteState,
+        async () => {
+          try {
+            const { flows: existingFlows, operations: existingOperations } =
+              await fetchRemoteState();
+            const flowResult = await this.syncFlows(localFlows, existingFlows);
+            const operationResult = await this.syncOperations(
+              sortedOperations,
+              existingOperations,
+              { managedFlowIds }
+            );
 
-              // Import flows
-              for (const flow of localFlows) {
-                const { id, ...flowData } = flow;
-                await client.request(createFlow(flowData));
-              }
+            this.logSyncPreview("Flows", flowResult);
+            this.logSyncPreview("Operations", operationResult);
 
-              return {
-                status: "success" as const,
-                message: `Imported ${localFlows.length} flows and ${sortedOperations.length} operations`,
-              };
-            },
-            dryRun
-          )
-          .then(() => {
-            resolve({
-              status: "success",
-              message: "Import operation completed successfully",
-            });
-          })
-          .catch((error) => {
-            resolve({ status: "failure", message: error.message });
-          });
-      });
+            const summary = this.buildImportSummary(
+              flowResult.stats,
+              operationResult.stats
+            );
+            outcome = { status: "success", message: summary };
+            return outcome;
+          } catch (error: any) {
+            outcome = { status: "failure", message: error.message };
+            throw error;
+          }
+        },
+        false
+      );
+
+      return outcome;
     } catch (error: any) {
+      console.error("Failed to import flows and operations:", error.message);
       return { status: "failure", message: error.message };
     }
   }

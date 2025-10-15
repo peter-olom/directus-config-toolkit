@@ -22,6 +22,7 @@ export interface DirectusTestConfig {
   adminPassword?: string;
   key?: string;
   secret?: string;
+  startupTimeout?: number;
 }
 
 export class DirectusSQLiteTestManager {
@@ -58,6 +59,7 @@ export class DirectusSQLiteTestManager {
         DB_FILENAME: '/directus/database/db.sqlite',
         WEBSOCKETS_ENABLED: 'false',
         CACHE_ENABLED: 'false',
+        PM2_HOME: '/tmp/.pm2',
         RATE_LIMITER_ENABLED: 'false',
         PUBLIC_URL: `http://localhost:${apiPort}`
       },
@@ -73,7 +75,17 @@ export class DirectusSQLiteTestManager {
     
     // Wait for Directus to be ready
     const apiUrl = `http://localhost:${apiPort}`;
-    await this.waitForDirectus(apiUrl);
+    try {
+      await this.waitForDirectus(apiUrl, config.startupTimeout);
+    } catch (error) {
+      try {
+        const logs = await this.dockerManager.getContainerLogs(apiName);
+        console.error(`Directus startup logs for ${apiName}:`, logs);
+      } catch (logError) {
+        console.error(`Failed to fetch logs for ${apiName}:`, logError);
+      }
+      throw error;
+    }
 
     // Get admin token
     const adminToken = await this.getAdminToken(apiUrl, adminEmail, adminPassword);

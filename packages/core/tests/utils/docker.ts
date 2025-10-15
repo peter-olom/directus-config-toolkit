@@ -58,7 +58,7 @@ export class DockerTestManager {
           NetworkMode: this.networkName,
           PortBindings: config.ports ? this.formatPortBindings(config.ports) : undefined,
           Binds: config.volumes,
-          AutoRemove: true
+          AutoRemove: false
         }
       };
 
