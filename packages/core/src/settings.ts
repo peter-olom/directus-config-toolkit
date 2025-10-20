@@ -1,16 +1,9 @@
-import { join } from "path";
+import { readSettings, updateSettings, readRoles } from "@directus/sdk";
+import { readFileSync, writeFileSync, existsSync } from "fs";
+import _ from "lodash";
 import { client, ensureConfigDirs } from "./helper";
-import {
-  readRole,
-  readSettings,
-  updateSettings,
-  readRoles,
-} from "@directus/sdk";
-import { readFileSync, writeFileSync } from "fs";
 import { findPublicRole } from "./roles";
-import { v4 as uuidv4 } from "uuid";
 import { BaseConfigManager, FieldExclusionConfig } from "./base-config-manager";
-import { ConfigType } from "./types/generic";
 
 interface Role {
   id: string;
@@ -56,7 +49,6 @@ interface DirectusSettings {
   [key: string]: any;
 }
 
-// Define fields that are supported by the SDK
 const SDK_SUPPORTED_FIELDS = [
   "project_name",
   "project_url",
@@ -88,7 +80,6 @@ const SDK_SUPPORTED_FIELDS = [
   "report_feature_url",
 ];
 
-// Define fields that might cause foreign key constraints
 const FOREIGN_KEY_FIELDS = [
   "project_logo",
   "public_foreground",
@@ -97,7 +88,6 @@ const FOREIGN_KEY_FIELDS = [
   "public_favicon",
 ];
 
-// Define additional fields supported by the API but not in the SDK types
 const UNSUPPORTED_FIELDS = [
   "public_registration",
   "public_registration_role",
@@ -106,12 +96,35 @@ const UNSUPPORTED_FIELDS = [
   "visual_editor_urls",
 ];
 
+interface ValidationContext {
+  roles?: Role[];
+  files?: Array<{ id: string }>;
+  folders?: Array<{ id: string }>;
+}
+
+interface ValidationResult {
+  errors: string[];
+  warnings: string[];
+}
+
+interface CategorizedSettings {
+  safe: Record<string, any>;
+  foreignKey: Record<string, any>;
+  extended: Record<string, any>;
+  invalid: string[];
+}
+
+interface SettingsDiff {
+  changed: string[];
+  added: string[];
+  removed: string[];
+}
+
 export class SettingsManager extends BaseConfigManager<DirectusSettings> {
   protected readonly configType = "settings";
   protected readonly defaultFilename = "settings.json";
 
   constructor() {
-    // Settings typically exclude ID field for export/import
     const fieldConfig: FieldExclusionConfig = {
       excludeFields: ["id"],
     };
@@ -122,20 +135,444 @@ export class SettingsManager extends BaseConfigManager<DirectusSettings> {
 
   protected async fetchRemoteData(): Promise<DirectusSettings[]> {
     const settings = await client.request(readSettings());
-    // Settings is a single object, but we wrap it in an array for consistency
     return [settings];
   }
 
-  private async auditExport(settings: DirectusSettings) {
-    const settingsSnapshotPath = await this.storeEnhancedSnapshot([settings]);
-    await this.auditManager.log({
-      operation: "export",
-      manager: "SettingsManager",
-      itemType: "settings",
-      status: "success",
-      message: "Exported settings successfully",
-      snapshotFile: settingsSnapshotPath,
+  private async fetchRemoteSettings() {
+    const settings = await client.request(readSettings());
+    return this.normalizeSettings(settings);
+  }
+
+  private loadLocalSettings(): DirectusSettings {
+    try {
+      return JSON.parse(readFileSync(this.configPath, "utf8"));
+    } catch (error: any) {
+      throw new Error(
+        `Failed to read local settings configuration: ${error?.message || error}`
+      );
+    }
+  }
+
+  private readOptionalConfig<T>(filename: string): T | undefined {
+    const targetPath = this.configPath.replace("settings.json", filename);
+    if (!existsSync(targetPath)) {
+      return undefined;
+    }
+
+    try {
+      return JSON.parse(readFileSync(targetPath, "utf8")) as T;
+    } catch (error: any) {
+      console.warn(
+        `Failed to parse ${filename}: ${error?.message || error}. Skipping validation for this reference.`
+      );
+      return undefined;
+    }
+  }
+
+  private loadValidationContext(): ValidationContext {
+    return {
+      roles: this.readOptionalConfig<Role[]>("roles.json"),
+      files: this.readOptionalConfig<Array<{ id: string }>>("files.json"),
+      folders: this.readOptionalConfig<Array<{ id: string }>>("folders.json"),
+    };
+  }
+
+  protected validateLocalConfig(
+    settings: any,
+    context: ValidationContext
+  ): ValidationResult {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+      errors.push("settings.json must contain an object.");
+      return { errors, warnings };
+    }
+
+    const categorized = this.categorizeSettings(settings as DirectusSettings);
+    if (categorized.invalid.length > 0) {
+      warnings.push(
+        `Ignoring ${categorized.invalid.length} unsupported setting field(s): ${categorized.invalid.join(
+          ", "
+        )}`
+      );
+    }
+
+    const numericFields = ["auth_login_attempts"];
+    numericFields.forEach((field) => {
+      if (
+        Object.prototype.hasOwnProperty.call(settings, field) &&
+        settings[field] !== null &&
+        typeof settings[field] !== "number"
+      ) {
+        errors.push(`Setting "${field}" must be a number when provided.`);
+      }
     });
+
+    const booleanFields = [
+      "public_registration",
+      "public_registration_verify_email",
+    ];
+    booleanFields.forEach((field) => {
+      if (
+        Object.prototype.hasOwnProperty.call(settings, field) &&
+        settings[field] !== null &&
+        typeof settings[field] !== "boolean"
+      ) {
+        errors.push(`Setting "${field}" must be a boolean when provided.`);
+      }
+    });
+
+    if (
+      Object.prototype.hasOwnProperty.call(settings, "default_language") &&
+      settings.default_language !== null &&
+      typeof settings.default_language !== "string"
+    ) {
+      errors.push(`Setting "default_language" must be a string when provided.`);
+    }
+
+    const fileReferenceFields = [
+      "project_logo",
+      "public_foreground",
+      "public_background",
+      "public_favicon",
+    ];
+
+    const fileContext = context.files;
+    fileReferenceFields.forEach((field) => {
+      if (!Object.prototype.hasOwnProperty.call(settings, field)) {
+        return;
+      }
+      const value = settings[field];
+      if (value === null || value === undefined) {
+        return;
+      }
+      if (typeof value !== "string") {
+        errors.push(`Setting "${field}" must reference a file identifier.`);
+        return;
+      }
+      if (!fileContext) {
+        warnings.push(
+          `Cannot validate "${field}" because files.json is missing or unreadable.`
+        );
+        return;
+      }
+      const exists = fileContext.some((file) => file.id === value);
+      if (!exists) {
+        warnings.push(
+          `Setting "${field}" references unknown file "${value}".`
+        );
+      }
+    });
+
+    if (
+      Object.prototype.hasOwnProperty.call(settings, "storage_default_folder")
+    ) {
+      const folderValue = settings.storage_default_folder;
+      if (folderValue !== null && folderValue !== undefined) {
+        if (typeof folderValue !== "string") {
+          errors.push(
+            `Setting "storage_default_folder" must reference a folder identifier.`
+          );
+        } else if (!context.folders) {
+          warnings.push(
+            `Cannot validate "storage_default_folder" because folders.json is missing or unreadable.`
+          );
+        } else if (
+          !context.folders.some((folder) => folder.id === folderValue)
+        ) {
+          warnings.push(
+            `Setting "storage_default_folder" references unknown folder "${folderValue}".`
+          );
+        }
+      }
+    }
+
+    if (
+      Object.prototype.hasOwnProperty.call(settings, "public_registration_role")
+    ) {
+      const roleId = settings.public_registration_role;
+      if (roleId !== null && roleId !== undefined) {
+        if (typeof roleId !== "string") {
+          errors.push(
+            `Setting "public_registration_role" must reference a role identifier.`
+          );
+        } else if (!context.roles) {
+          warnings.push(
+            `Cannot validate "public_registration_role" because roles.json is missing or unreadable.`
+          );
+        } else if (!context.roles.some((role) => role.id === roleId)) {
+          warnings.push(
+            `Setting "public_registration_role" references unknown role "${roleId}".`
+          );
+        }
+      }
+    }
+
+    return { errors, warnings };
+  }
+
+  private categorizeSettings(settings: DirectusSettings): CategorizedSettings {
+    const safe: Record<string, any> = {};
+    const foreignKey: Record<string, any> = {};
+    const extended: Record<string, any> = {};
+    const invalid: string[] = [];
+
+    Object.entries(settings).forEach(([key, value]) => {
+      if (value === undefined) {
+        return;
+      }
+
+      if (SDK_SUPPORTED_FIELDS.includes(key)) {
+        if (FOREIGN_KEY_FIELDS.includes(key)) {
+          foreignKey[key] = value;
+        } else {
+          safe[key] = value;
+        }
+        return;
+      }
+
+      if (UNSUPPORTED_FIELDS.includes(key)) {
+        extended[key] = value;
+        return;
+      }
+
+      invalid.push(key);
+    });
+
+    return { safe, foreignKey, extended, invalid };
+  }
+
+  private diffSettings(
+    local: Record<string, any>,
+    remote: Record<string, any>
+  ): SettingsDiff {
+    const changed: string[] = [];
+    const added: string[] = [];
+    const removed: string[] = [];
+
+    const allKeys = new Set([
+      ...Object.keys(local),
+      ...Object.keys(remote ?? {}),
+    ]);
+
+    for (const key of allKeys) {
+      const localValue = local[key];
+      const remoteValue = remote ? remote[key] : undefined;
+
+      if (localValue === undefined && remoteValue !== undefined) {
+        removed.push(key);
+        continue;
+      }
+
+      if (localValue !== undefined && remoteValue === undefined) {
+        added.push(key);
+        continue;
+      }
+
+      if (!_.isEqual(localValue, remoteValue)) {
+        changed.push(key);
+      }
+    }
+
+    return { changed, added, removed };
+  }
+
+  private printDiffPreview(diff: SettingsDiff) {
+    if (
+      diff.changed.length === 0 &&
+      diff.added.length === 0 &&
+      diff.removed.length === 0
+    ) {
+      console.log("Settings already match the target configuration.");
+      return;
+    }
+
+    if (diff.changed.length > 0) {
+      console.log(
+        `Will update ${diff.changed.length} field(s): ${diff.changed.join(", ")}`
+      );
+    }
+    if (diff.added.length > 0) {
+      console.log(
+        `Will add ${diff.added.length} field(s) missing in destination: ${diff.added.join(", ")}`
+      );
+    }
+    if (diff.removed.length > 0) {
+      console.warn(
+        `Destination has ${diff.removed.length} extra field(s) not present locally: ${diff.removed.join(
+          ", "
+        )}. They will be left untouched.`
+      );
+    }
+  }
+
+  private pickChangedFields(
+    desired: Record<string, any>,
+    remote: Record<string, any>
+  ) {
+    return Object.fromEntries(
+      Object.entries(desired).filter(([key, value]) => {
+        const remoteValue = remote ? remote[key] : undefined;
+        return !_.isEqual(remoteValue, value);
+      })
+    );
+  }
+
+  private async applyPublicRegistrationRole(
+    desiredRoleId: string,
+    context: ValidationContext
+  ): Promise<boolean> {
+    let roleId = desiredRoleId;
+    let roleExists = await this.roleExists(roleId);
+
+    if (!roleExists) {
+      try {
+        const destinationRoles = await client.request(readRoles());
+
+        if (context.roles) {
+          const sourceRole = context.roles.find((role) => role.id === roleId);
+          if (sourceRole) {
+            const isPublic =
+              sourceRole.name?.toLowerCase().includes("public") ||
+              sourceRole.name?.startsWith("$t:public") ||
+              sourceRole.icon === "public";
+
+            if (isPublic) {
+              const destPublicRole = findPublicRole(destinationRoles);
+              if (destPublicRole) {
+                console.log(
+                  `Resolved public role mapping ${roleId} → ${destPublicRole.id}`
+                );
+                roleId = destPublicRole.id;
+                roleExists = true;
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.warn(
+          "Failed to resolve public role mapping from destination roles:",
+          (error as Error).message || error
+        );
+      }
+    }
+
+    if (!roleExists) {
+      console.warn(
+        `Role ${desiredRoleId} not found in destination. Skipping public_registration_role update.`
+      );
+      return false;
+    }
+
+    await client.request({
+      method: "PATCH",
+      path: "/settings",
+      body: {
+        public_registration_role: roleId,
+      },
+    } as any);
+
+    return true;
+  }
+
+  private async applyExtendedSettings(
+    extended: Record<string, any>,
+    remote: Record<string, any>,
+    context: ValidationContext
+  ): Promise<number> {
+    const payload: Record<string, any> = {};
+    let patchedCount = 0;
+
+    for (const [field, value] of Object.entries(extended)) {
+      const remoteValue = remote ? remote[field] : undefined;
+      if (_.isEqual(remoteValue, value)) {
+        continue;
+      }
+
+      if (field === "public_registration_role" && typeof value === "string") {
+        const updated = await this.applyPublicRegistrationRole(value, context);
+        if (updated) {
+          patchedCount += 1;
+        }
+        continue;
+      }
+
+      payload[field] = value;
+    }
+
+    if (Object.keys(payload).length > 0) {
+      await client.request({
+        method: "PATCH",
+        path: "/settings",
+        body: payload,
+      } as any);
+      patchedCount += Object.keys(payload).length;
+    }
+
+    return patchedCount;
+  }
+
+  private async applySettings(
+    desiredSettings: DirectusSettings,
+    context: ValidationContext
+  ): Promise<string> {
+    const remoteSettings = await this.fetchRemoteSettings();
+    const diff = this.diffSettings(desiredSettings, remoteSettings);
+
+    if (
+      diff.changed.length === 0 &&
+      diff.added.length === 0 &&
+      diff.removed.length === 0
+    ) {
+      return "Settings already synchronized.";
+    }
+
+    const { safe, foreignKey, extended } =
+      this.categorizeSettings(desiredSettings);
+
+    const summaryParts: string[] = [];
+
+    const basePayload = this.pickChangedFields(safe, remoteSettings);
+    if (Object.keys(basePayload).length > 0) {
+      await client.request(updateSettings(basePayload));
+      summaryParts.push(
+        `updated ${Object.keys(basePayload).length} base field(s)`
+      );
+    }
+
+    const foreignEntries = Object.entries(foreignKey).filter(
+      ([key, value]) => !_.isEqual(remoteSettings[key], value)
+    );
+    for (const [field, value] of foreignEntries) {
+      try {
+        await client.request(updateSettings({ [field]: value } as any));
+        summaryParts.push(`patched relation field "${field}"`);
+      } catch (error: any) {
+        console.warn(
+          `Failed to update relation field "${field}": ${
+            error?.message || error
+          }`
+        );
+      }
+    }
+
+    const extendedCount = await this.applyExtendedSettings(
+      extended,
+      remoteSettings,
+      context
+    );
+    if (extendedCount > 0) {
+      summaryParts.push(`patched ${extendedCount} extended field(s)`);
+    }
+
+    if (diff.removed.length > 0) {
+      summaryParts.push(
+        `${diff.removed.length} destination-only field(s) left untouched`
+      );
+    }
+
+    return summaryParts.join("; ") || "Settings import completed.";
   }
 
   public async exportConfig(): Promise<void> {
@@ -146,18 +583,24 @@ export class SettingsManager extends BaseConfigManager<DirectusSettings> {
       const settings = settingsArray[0];
 
       if (settings.id === null) {
-        // Handle case with no settings
-        return console.log("No settings found.");
+        console.log("No settings found.");
+        return;
       }
 
-      // Normalize the settings (removes ID field)
       const normalizedSettings = this.normalizeItem(settings);
 
       writeFileSync(
         this.configPath,
         JSON.stringify(normalizedSettings, null, 2)
       );
-      await this.auditExport(normalizedSettings);
+      await this.auditManager.log({
+        operation: "export",
+        manager: "SettingsManager",
+        itemType: "settings",
+        status: "success",
+        message: "Exported settings successfully",
+        snapshotFile: await this.storeEnhancedSnapshot([normalizedSettings]),
+      });
 
       console.log(`Settings exported to ${this.configPath}`);
     } catch (error) {
@@ -166,24 +609,18 @@ export class SettingsManager extends BaseConfigManager<DirectusSettings> {
     }
   }
 
-  // Legacy method name for backward compatibility
   exportSettings = () => this.exportConfig();
 
-  // Check if a role exists by ID
   private async roleExists(roleId: string): Promise<boolean> {
     if (!roleId) return false;
 
     try {
-      // Use callDirectusAPI to check if role exists
-      const role = await client.request(readRole(roleId));
-
-      return !!role;
+      const role = await client.request(readRoles({ filter: { id: { _eq: roleId } } }));
+      return Array.isArray(role) ? role.some((r: any) => r.id === roleId) : !!role;
     } catch (error: any) {
       if (error.response?.status === 404) {
         return false;
       }
-
-      // For other errors, log and assume role doesn't exist to be safe
       console.error(
         `Error checking if role ${roleId} exists:`,
         error.message || error
@@ -192,228 +629,70 @@ export class SettingsManager extends BaseConfigManager<DirectusSettings> {
     }
   }
 
-  private async auditImport(dryRun = false) {
-    const localSettings = JSON.parse(readFileSync(this.configPath, "utf8"));
-    await this.auditManager.auditImportOperation(
-      "settings",
-      "SettingsManager",
-      localSettings,
-      async () => await this.fetchRemoteSettings(),
-      async () => {
-        await this.handleImportSettings();
-        return {
-          status: "success",
-          message: "Settings imported successfully.",
-        };
-      },
-      dryRun
-    );
-  }
-
   public async importConfig(
     dryRun = false
   ): Promise<{ status: "success" | "failure"; message?: string }> {
     try {
-      await this.auditImport(dryRun);
-      if (!dryRun) {
-        console.log("Settings import completed successfully.");
-      } else {
-        console.log("[Dry Run] Import preview complete. No changes applied.");
+      const localSettings = this.loadLocalSettings();
+      const context = this.loadValidationContext();
+      const validation = this.validateLocalConfig(localSettings, context);
+
+      if (validation.errors.length > 0) {
+        validation.errors.forEach((err) => console.error(`❌ ${err}`));
+        return {
+          status: "failure",
+          message: `Validation failed with ${validation.errors.length} error(s).`,
+        };
       }
-      return { status: "success", message: "Settings imported successfully." };
+
+      if (validation.warnings.length > 0) {
+        validation.warnings.forEach((warn) => console.warn(`⚠️ ${warn}`));
+      }
+
+      const remoteSettings = await this.fetchRemoteSettings();
+      const diff = this.diffSettings(localSettings, remoteSettings);
+      this.printDiffPreview(diff);
+
+      if (dryRun) {
+        return {
+          status: "success",
+          message: "Dry run completed - no changes applied",
+        };
+      }
+
+      let outcome: { status: "success" | "failure"; message?: string } = {
+        status: "success",
+      };
+
+      await this.auditManager.auditImportOperation(
+        "settings",
+        "SettingsManager",
+        localSettings,
+        () => this.fetchRemoteSettings(),
+        async () => {
+          try {
+            const summary = await this.applySettings(localSettings, context);
+            outcome = { status: "success", message: summary };
+            return outcome;
+          } catch (error: any) {
+            outcome = { status: "failure", message: error.message };
+            throw error;
+          }
+        },
+        false
+      );
+
+      return outcome;
     } catch (error: any) {
-      console.error("Error importing settings:", error);
-      return { status: "failure", message: error.message };
+      console.error("Error importing settings:", error.message || error);
+      return { status: "failure", message: error.message || String(error) };
     }
   }
 
-  // Legacy method name for backward compatibility
   importSettings = (dryRun?: boolean) => this.importConfig(dryRun);
 
-  private async handleImportSettings() {
-    try {
-      console.log("Importing settings...");
-      const destinationSettings = await client.request(readSettings());
-      if (destinationSettings.id === null) {
-        return console.warn(
-          "Settings have not been initialized yet. Save settings in the Directus admin panel first."
-        );
-      }
-
-      console.log("Reading settings from file...");
-      const settings = JSON.parse(readFileSync(this.configPath, "utf8"));
-
-      // Check for references that might cause foreign key constraints
-      // Get field lists
-      const validFields = [...SDK_SUPPORTED_FIELDS, ...UNSUPPORTED_FIELDS];
-
-      // Filter and validate settings
-      const safeSettings: Record<string, any> = {};
-      const foreignKeySettings: Record<string, any> = {};
-      const extendedSettings: Record<string, any> = {};
-      const invalidFields: string[] = [];
-
-      // Sort settings into categories
-      Object.entries(settings).forEach(([key, value]) => {
-        if (!validFields.includes(key)) {
-          invalidFields.push(key);
-          return;
-        }
-
-        if (UNSUPPORTED_FIELDS.includes(key)) {
-          extendedSettings[key] = value;
-        } else if (FOREIGN_KEY_FIELDS.includes(key)) {
-          foreignKeySettings[key] = value;
-        } else {
-          safeSettings[key] = value;
-        }
-      });
-
-      // Log any invalid fields found
-      if (invalidFields.length > 0) {
-        console.warn(
-          `Found ${invalidFields.length} invalid settings fields that will be ignored:`,
-          invalidFields.join(", ")
-        );
-      }
-
-      // First update all safe settings that don't have foreign key references
-      console.log("Updating base settings...");
-      await client.request(updateSettings(safeSettings));
-      console.log("Base settings updated successfully.");
-
-      // Handle each foreign key field separately to avoid constraint issues
-      if (Object.keys(foreignKeySettings).length > 0) {
-        console.log(
-          "Processing fields that might have foreign key constraints..."
-        );
-
-        for (const [field, value] of Object.entries(foreignKeySettings)) {
-          try {
-            // Safe cast since we've confirmed these fields are in the SDK
-            const updateData = { [field]: value } as any;
-            await client.request(updateSettings(updateData));
-            console.log(`Successfully updated ${field}`);
-          } catch (error: any) {
-            console.warn(`Failed to update ${field}: ${error.message}`);
-          }
-        }
-      }
-
-      // Handle special case for public_registration_role
-      if (extendedSettings.public_registration_role) {
-        console.log("Processing public_registration_role via direct API...");
-        let roleId = extendedSettings.public_registration_role;
-
-        try {
-          // First check direct ID match
-          let roleExists = await this.roleExists(roleId);
-
-          // If role doesn't exist by direct ID, check if it might be the Public role with a different ID
-          if (!roleExists) {
-            console.log(
-              `Role ${roleId} not found directly. Checking if this is a Public role...`
-            );
-
-            // Read the source and destination roles to look for Public role mapping
-            try {
-              // Get existing roles in destination
-              const existingRoles = await client.request(readRoles());
-
-              // Read the source roles from file
-              const rolePath = this.configPath.replace(
-                "settings.json",
-                "roles.json"
-              );
-              const incomingRoles = JSON.parse(readFileSync(rolePath, "utf8"));
-
-              // Find the source role that was referenced
-              const sourceRole: Role | undefined = (
-                incomingRoles as Role[]
-              ).find((r: Role) => r.id === roleId);
-
-              if (sourceRole) {
-                // Check if this is a Public role
-                if (
-                  sourceRole.name?.toLowerCase().includes("public") ||
-                  sourceRole.name?.startsWith("$t:public") ||
-                  sourceRole.icon === "public"
-                ) {
-                  // Find equivalent Public role in destination
-                  const destPublicRole = findPublicRole(existingRoles);
-
-                  if (destPublicRole) {
-                    console.log(
-                      `Found matching Public role in destination: ${destPublicRole.name} (${destPublicRole.id})`
-                    );
-                    roleId = destPublicRole.id;
-                    roleExists = true;
-                  }
-                }
-              }
-            } catch (e) {
-              console.warn("Failed to perform advanced role mapping:", e);
-              // Continue with original roleId
-            }
-          }
-
-          if (roleExists) {
-            // Use direct API call instead of SDK for unsupported fields
-            await client.request({
-              method: "PATCH",
-              path: "/settings",
-              body: {
-                public_registration_role: roleId,
-              },
-            } as any);
-            console.log(
-              `Successfully updated public_registration_role to ${roleId}`
-            );
-          } else {
-            console.warn(
-              `Role ${roleId} not found. Public registration role will not be set.`
-            );
-          }
-        } catch (error: any) {
-          console.warn(
-            `Failed to update public_registration_role: ${error.message}`
-          );
-        }
-      }
-
-      // Handle other extended fields with direct API calls
-      const otherExtendedFields = { ...extendedSettings };
-      delete otherExtendedFields.public_registration_role;
-
-      if (Object.keys(otherExtendedFields).length > 0) {
-        console.log("Processing other extended fields via direct API...");
-
-        try {
-          await client.request({
-            method: "PATCH",
-            path: "/settings",
-            body: otherExtendedFields,
-          } as any);
-          console.log("Successfully updated extended fields");
-        } catch (error: any) {
-          console.warn(`Failed to update extended fields: ${error.message}`);
-        }
-      }
-    } catch (error: any) {
-      console.error("Settings import failed:", error.message || error);
-      throw error;
-    }
-  }
-
   normalizeSettings(settings: any) {
-    // Create a copy of settings and remove id
     const { id, user_created, ...normalizedSettings } = settings;
-
     return normalizedSettings;
-  }
-
-  private async fetchRemoteSettings() {
-    const settings = await client.request(readSettings());
-    return this.normalizeSettings(settings);
   }
 }
